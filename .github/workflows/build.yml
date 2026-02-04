@@ -1,0 +1,218 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            backend_ext: ""
+          - os: ubuntu-latest
+            platform: linux
+            backend_ext: ""
+          - os: windows-latest
+            platform: win
+            backend_ext: ".exe"
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies and PyInstaller
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install pyinstaller
+          pip install -e .
+        shell: bash
+
+      - name: Build Python backend with PyInstaller
+        run: |
+          cd backend
+
+          # Determine platform-specific separator for --add-data
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            SEP=";"
+          else
+            SEP=":"
+          fi
+
+          pyinstaller --onefile \
+            --console \
+            --name "cabinet-api" \
+            --hidden-import uvicorn.logging \
+            --hidden-import uvicorn.lifespan \
+            --hidden-import uvicorn.lifespan.on \
+            --hidden-import uvicorn.lifespan.off \
+            --hidden-import uvicorn.protocols \
+            --hidden-import uvicorn.protocols.http \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.http.h11_impl \
+            --hidden-import uvicorn.protocols.http.httptools_impl \
+            --hidden-import uvicorn.protocols.websockets \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.protocols.websockets.websockets_impl \
+            --hidden-import uvicorn.protocols.websockets.wsproto_impl \
+            --hidden-import uvicorn.loops \
+            --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.loops.asyncio \
+            --hidden-import uvicorn.loops.uvloop \
+            --hidden-import fastapi \
+            --hidden-import pydantic \
+            --hidden-import pydantic_settings \
+            --hidden-import sqlalchemy \
+            --hidden-import sqlalchemy.dialects.sqlite \
+            --hidden-import aiosqlite \
+            --hidden-import sse_starlette \
+            --hidden-import pymupdf \
+            --hidden-import pymupdf4llm \
+            --hidden-import fitz \
+            --hidden-import docx \
+            --hidden-import openpyxl \
+            --hidden-import anthropic \
+            --hidden-import openai \
+            --hidden-import google.genai \
+            --hidden-import python_multipart \
+            --hidden-import multipart \
+            --hidden-import starlette.formparsers \
+            --exclude-module torch \
+            --exclude-module tensorflow \
+            --exclude-module keras \
+            --exclude-module matplotlib \
+            --exclude-module PIL \
+            --exclude-module cv2 \
+            --exclude-module numpy \
+            --exclude-module scipy \
+            --exclude-module pandas \
+            run_server.py
+        shell: bash
+
+      - name: Test backend executable
+        run: |
+          cd backend
+          echo "Testing backend executable..."
+          echo "Executable size: $(ls -lh ./dist/cabinet-api${{ matrix.backend_ext }})"
+
+          # Start server in background
+          ./dist/cabinet-api${{ matrix.backend_ext }} --port 19999 > server.log 2>&1 &
+          PID=$!
+          echo "Started server with PID: $PID"
+
+          # Wait for server to start (PyInstaller bundles can be slow)
+          echo "Waiting for server to start..."
+          for i in {1..120}; do
+            if curl -s http://127.0.0.1:19999/api/v1/health > /dev/null 2>&1; then
+              echo "Server is up after $i seconds!"
+              break
+            fi
+            if ! kill -0 $PID 2>/dev/null; then
+              echo "Server process died!"
+              echo "=== Server log ==="
+              cat server.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Final health check
+          echo "Performing health check..."
+          if curl -f http://127.0.0.1:19999/api/v1/health; then
+            echo ""
+            echo "Health check passed!"
+          else
+            echo "Health check failed!"
+            echo "=== Server log ==="
+            cat server.log || true
+            kill $PID 2>/dev/null || true
+            exit 1
+          fi
+
+          kill $PID 2>/dev/null || true
+        shell: bash
+        continue-on-error: false
+
+      - name: Copy backend to resources
+        run: |
+          mkdir -p backend-dist
+          cp "backend/dist/cabinet-api${{ matrix.backend_ext }}" "backend-dist/cabinet-api${{ matrix.backend_ext }}"
+          ls -la backend-dist/
+        shell: bash
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run typecheck
+        run: npx tsc --noEmit
+
+      - name: Build Electron app
+        run: npx electron-vite build
+
+      - name: Package Electron app
+        run: npx electron-builder --${{ matrix.platform }} --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            release/*.dmg
+            release/*.exe
+            release/*.AppImage
+            release/*.yml
+            release/*.blockmap
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+            artifacts/**/*.AppImage
+            artifacts/**/latest*.yml
+            artifacts/**/*.blockmap
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

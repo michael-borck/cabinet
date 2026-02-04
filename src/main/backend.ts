@@ -1,23 +1,42 @@
 import { ChildProcess, spawn } from 'child_process'
 import { join } from 'path'
 import { app } from 'electron'
+import { is } from '@electron-toolkit/utils'
 
 let backendProcess: ChildProcess | null = null
 const BACKEND_PORT = 8420
 
 export async function startBackend(): Promise<void> {
-  const backendDir = join(app.getAppPath(), 'backend')
+  if (is.dev) {
+    // Development: use uv to run from source
+    const backendDir = join(app.getAppPath(), 'backend')
 
-  backendProcess = spawn('uv', [
-    'run', 'uvicorn',
-    'cabinet.app:create_app',
-    '--factory',
-    '--port', String(BACKEND_PORT),
-    '--host', '127.0.0.1'
-  ], {
-    cwd: backendDir,
-    stdio: ['pipe', 'pipe', 'pipe']
-  })
+    backendProcess = spawn(
+      'uv',
+      [
+        'run',
+        'uvicorn',
+        'cabinet.app:create_app',
+        '--factory',
+        '--port',
+        String(BACKEND_PORT),
+        '--host',
+        '127.0.0.1'
+      ],
+      {
+        cwd: backendDir,
+        stdio: ['pipe', 'pipe', 'pipe']
+      }
+    )
+  } else {
+    // Production: use bundled PyInstaller executable
+    const ext = process.platform === 'win32' ? '.exe' : ''
+    const backendPath = join(process.resourcesPath, 'backend', `cabinet-api${ext}`)
+
+    backendProcess = spawn(backendPath, ['--port', String(BACKEND_PORT), '--host', '127.0.0.1'], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+  }
 
   backendProcess.stdout?.on('data', (data) => {
     console.log(`[backend] ${data}`)
@@ -27,8 +46,13 @@ export async function startBackend(): Promise<void> {
     console.error(`[backend] ${data}`)
   })
 
-  // Wait for backend to be ready
-  await waitForBackend()
+  backendProcess.on('error', (err) => {
+    console.error(`[backend] Failed to start: ${err.message}`)
+  })
+
+  // PyInstaller bundles can be slow to start on first run
+  const maxRetries = is.dev ? 30 : 120
+  await waitForBackend(maxRetries)
 }
 
 export function stopBackend(): void {
@@ -46,7 +70,7 @@ async function waitForBackend(maxRetries = 30, delay = 1000): Promise<void> {
     } catch {
       // Backend not ready yet
     }
-    await new Promise(resolve => setTimeout(resolve, delay))
+    await new Promise((resolve) => setTimeout(resolve, delay))
   }
   console.warn('Backend did not start in time, continuing anyway')
 }
