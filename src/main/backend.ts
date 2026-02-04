@@ -1,0 +1,56 @@
+import { ChildProcess, spawn } from 'child_process'
+import { join } from 'path'
+import { app } from 'electron'
+
+let backendProcess: ChildProcess | null = null
+const BACKEND_PORT = 8420
+
+export async function startBackend(): Promise<void> {
+  const backendDir = join(app.getAppPath(), 'backend')
+
+  backendProcess = spawn('uv', [
+    'run', 'uvicorn',
+    'file_sorter.app:create_app',
+    '--factory',
+    '--port', String(BACKEND_PORT),
+    '--host', '127.0.0.1'
+  ], {
+    cwd: backendDir,
+    stdio: ['pipe', 'pipe', 'pipe']
+  })
+
+  backendProcess.stdout?.on('data', (data) => {
+    console.log(`[backend] ${data}`)
+  })
+
+  backendProcess.stderr?.on('data', (data) => {
+    console.error(`[backend] ${data}`)
+  })
+
+  // Wait for backend to be ready
+  await waitForBackend()
+}
+
+export function stopBackend(): void {
+  if (backendProcess) {
+    backendProcess.kill()
+    backendProcess = null
+  }
+}
+
+async function waitForBackend(maxRetries = 30, delay = 1000): Promise<void> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/v1/health`)
+      if (response.ok) return
+    } catch {
+      // Backend not ready yet
+    }
+    await new Promise(resolve => setTimeout(resolve, delay))
+  }
+  console.warn('Backend did not start in time, continuing anyway')
+}
+
+export function getBackendPort(): number {
+  return BACKEND_PORT
+}

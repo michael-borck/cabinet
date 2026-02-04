@@ -1,0 +1,266 @@
+"""Filesystem scanning and reconciliation service."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from file_sorter.db.models import File, Job, Source
+from file_sorter.utils.hashing import compute_file_hash
+
+logger = logging.getLogger(__name__)
+
+
+class ScannerService:
+    """Scans source directories and reconciles filesystem state with the database."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def scan_source(self, source_id: int, mode: str = "quick_sync") -> Job:
+        """Scan a source directory and reconcile with the database.
+
+        Args:
+            source_id: The ID of the source to scan.
+            mode: Either ``"quick_sync"`` (only new/changed files) or
+                ``"full_reindex"`` (reprocess everything).
+
+        Returns:
+            The :class:`Job` record tracking this scan.
+
+        Raises:
+            ValueError: If the source does not exist or its path is invalid.
+        """
+        # Fetch the source ---------------------------------------------------
+        result = await self._session.execute(
+            select(Source).where(Source.id == source_id)
+        )
+        source = result.scalar_one_or_none()
+        if source is None:
+            raise ValueError(f"Source with id={source_id} not found")
+
+        if not os.path.isdir(source.path):
+            raise ValueError(
+                f"Source path does not exist or is not a directory: {source.path!r}"
+            )
+
+        # Create a job record -------------------------------------------------
+        job = Job(
+            job_type=mode,
+            status="running",
+            source_id=source_id,
+            total_files=0,
+            processed_files=0,
+            error_count=0,
+        )
+        self._session.add(job)
+        await self._session.flush()  # ensure job.id is populated
+
+        try:
+            # Walk the filesystem ---------------------------------------------
+            found_files = await self._walk_filesystem(source.path, source.recursive)
+            job.total_files = len(found_files)
+
+            # Reconcile -------------------------------------------------------
+            new_count, missing_count, changed_count = await self._reconcile(
+                source_id, found_files, mode
+            )
+            job.processed_files = new_count + missing_count + changed_count
+            job.status = "completed"
+
+            # Update source's last_scanned_at ----------------------------------
+            source.last_scanned_at = datetime.now(UTC)
+
+            logger.info(
+                "Scan completed for source %d (%s): "
+                "new=%d, missing=%d, changed=%d, total_found=%d",
+                source_id,
+                mode,
+                new_count,
+                missing_count,
+                changed_count,
+                len(found_files),
+            )
+        except Exception:
+            job.status = "failed"
+            job.error_count += 1
+            logger.exception("Scan failed for source %d", source_id)
+            raise
+        finally:
+            await self._session.flush()
+
+        return job
+
+    # ------------------------------------------------------------------
+    # Filesystem walking
+    # ------------------------------------------------------------------
+
+    async def _walk_filesystem(
+        self, root_path: str, recursive: bool
+    ) -> list[dict[str, Any]]:
+        """Walk the filesystem and collect file metadata.
+
+        Hidden files and directories (names starting with ``"."``) are skipped.
+
+        Returns:
+            A list of dicts with keys: ``path``, ``filename``, ``extension``,
+            ``size_bytes``, ``file_modified_at``.
+        """
+
+        def _scan() -> list[dict[str, Any]]:
+            files: list[dict[str, Any]] = []
+
+            if recursive:
+                for dirpath, dirnames, filenames in os.walk(root_path):
+                    # Skip hidden directories in-place so os.walk won't descend
+                    dirnames[:] = [
+                        d for d in dirnames if not d.startswith(".")
+                    ]
+                    for fname in filenames:
+                        if fname.startswith("."):
+                            continue
+                        full_path = os.path.join(dirpath, fname)
+                        info = _file_info(full_path, fname)
+                        if info is not None:
+                            files.append(info)
+            else:
+                try:
+                    entries = os.scandir(root_path)
+                except OSError as exc:
+                    logger.warning("Cannot scan directory %s: %s", root_path, exc)
+                    return files
+                with entries:
+                    for entry in entries:
+                        if entry.name.startswith(".") or not entry.is_file(
+                            follow_symlinks=False
+                        ):
+                            continue
+                        info = _file_info(entry.path, entry.name)
+                        if info is not None:
+                            files.append(info)
+
+            return files
+
+        return await asyncio.to_thread(_scan)
+
+    # ------------------------------------------------------------------
+    # Reconciliation
+    # ------------------------------------------------------------------
+
+    async def _reconcile(
+        self,
+        source_id: int,
+        found_files: list[dict[str, Any]],
+        mode: str,
+    ) -> tuple[int, int, int]:
+        """Compare filesystem state with the database and apply changes.
+
+        Returns:
+            ``(new_count, missing_count, changed_count)``
+        """
+        # Load existing DB files for this source ------------------------------
+        result = await self._session.execute(
+            select(File).where(File.source_id == source_id)
+        )
+        existing_files: list[File] = list(result.scalars().all())
+        existing_by_path: dict[str, File] = {f.path: f for f in existing_files}
+
+        found_paths: set[str] = {f["path"] for f in found_files}
+        found_by_path: dict[str, dict[str, Any]] = {f["path"]: f for f in found_files}
+
+        new_count = 0
+        missing_count = 0
+        changed_count = 0
+
+        # --- Full-reindex shortcut: reset all existing files to pending ------
+        if mode == "full_reindex":
+            for db_file in existing_files:
+                if db_file.path in found_paths:
+                    db_file.status = "pending"
+                    changed_count += 1
+
+        # --- New files (on filesystem but not in DB) -------------------------
+        existing_paths = set(existing_by_path.keys())
+        for path in found_paths - existing_paths:
+            info = found_by_path[path]
+            new_file = File(
+                source_id=source_id,
+                path=info["path"],
+                filename=info["filename"],
+                extension=info["extension"],
+                size_bytes=info["size_bytes"],
+                file_modified_at=info["file_modified_at"],
+                status="pending",
+            )
+            self._session.add(new_file)
+            new_count += 1
+
+        # --- Missing files (in DB but not on filesystem) ---------------------
+        for path in existing_paths - found_paths:
+            db_file = existing_by_path[path]
+            if db_file.status != "missing":
+                db_file.status = "missing"
+                missing_count += 1
+
+        # --- Existing files: check for modifications -------------------------
+        if mode != "full_reindex":
+            for path in existing_paths & found_paths:
+                db_file = existing_by_path[path]
+                fs_info = found_by_path[path]
+
+                # Compare modification time
+                fs_mtime = fs_info["file_modified_at"]
+                if db_file.file_modified_at is None or (
+                    fs_mtime is not None
+                    and fs_mtime != db_file.file_modified_at
+                ):
+                    # Mtime differs -- check content hash to be sure
+                    new_hash = await compute_file_hash(path)
+                    if new_hash != db_file.content_hash:
+                        db_file.status = "pending"
+                        db_file.content_hash = new_hash
+                        db_file.size_bytes = fs_info["size_bytes"]
+                        db_file.file_modified_at = fs_mtime
+                        changed_count += 1
+                    else:
+                        # Hash matches -- just update mtime
+                        db_file.file_modified_at = fs_mtime
+
+                # Ensure a previously-missing file that reappears is re-queued
+                if db_file.status == "missing":
+                    db_file.status = "pending"
+                    changed_count += 1
+
+        await self._session.flush()
+        return new_count, missing_count, changed_count
+
+
+# --------------------------------------------------------------------------
+# Module-level helpers
+# --------------------------------------------------------------------------
+
+def _file_info(full_path: str, filename: str) -> dict[str, Any] | None:
+    """Build a metadata dict for a single file, or *None* on OS errors."""
+    try:
+        stat = os.stat(full_path)
+    except OSError:
+        return None
+
+    _, ext = os.path.splitext(filename)
+    return {
+        "path": full_path,
+        "filename": filename,
+        "extension": ext.lower() if ext else None,
+        "size_bytes": stat.st_size,
+        "file_modified_at": datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+    }
