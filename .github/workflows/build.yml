@@ -82,6 +82,7 @@ jobs:
             --hidden-import sqlalchemy \
             --hidden-import sqlalchemy.dialects.sqlite \
             --hidden-import aiosqlite \
+            --hidden-import greenlet \
             --hidden-import sse_starlette \
             --hidden-import pymupdf \
             --hidden-import pymupdf4llm \
