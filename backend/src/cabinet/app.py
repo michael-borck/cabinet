@@ -5,8 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from file_sorter.config import get_settings
-from file_sorter.db.engine import init_db
+from cabinet.config import get_settings
+from cabinet.db.engine import init_db
 
 
 @asynccontextmanager
@@ -27,13 +27,13 @@ def create_app() -> FastAPI:
     )
 
     # Register routers
-    from file_sorter.routers import (
+    from cabinet.routers import (
         categories,
         files,
         jobs,
         sources,
     )
-    from file_sorter.routers import (
+    from cabinet.routers import (
         settings as settings_router,
     )
 

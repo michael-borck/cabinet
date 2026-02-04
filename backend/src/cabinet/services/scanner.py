@@ -11,8 +11,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from file_sorter.db.models import File, Job, Source
-from file_sorter.utils.hashing import compute_file_hash
+from cabinet.db.models import File, Job, Source
+from cabinet.utils.hashing import compute_file_hash
 
 logger = logging.getLogger(__name__)
 

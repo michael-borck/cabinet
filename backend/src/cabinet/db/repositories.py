@@ -16,7 +16,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
-from file_sorter.db.models import (
+from cabinet.db.models import (
     Category,
     File,
     FileCategory,

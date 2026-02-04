@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from file_sorter.db.engine import async_session_factory, get_session
-from file_sorter.db.repositories import JobRepository
-from file_sorter.schemas import JobEvent, JobResponse
+from cabinet.db.engine import async_session_factory, get_session
+from cabinet.db.repositories import JobRepository
+from cabinet.schemas import JobEvent, JobResponse
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 

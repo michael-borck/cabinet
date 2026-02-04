@@ -3,7 +3,7 @@ import tempfile
 
 import pytest
 
-from file_sorter.extractors.text import TextExtractor
+from cabinet.extractors.text import TextExtractor
 
 
 @pytest.fixture

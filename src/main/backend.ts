@@ -10,7 +10,7 @@ export async function startBackend(): Promise<void> {
 
   backendProcess = spawn('uv', [
     'run', 'uvicorn',
-    'file_sorter.app:create_app',
+    'cabinet.app:create_app',
     '--factory',
     '--port', String(BACKEND_PORT),
     '--host', '127.0.0.1'

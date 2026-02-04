@@ -8,9 +8,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from file_sorter.db.models import Category, File, FileCategory
-from file_sorter.llm.base import LLMProvider
-from file_sorter.utils.text import make_slug, truncate_text
+from cabinet.db.models import Category, File, FileCategory
+from cabinet.llm.base import LLMProvider
+from cabinet.utils.text import make_slug, truncate_text
 
 logger = logging.getLogger(__name__)
 

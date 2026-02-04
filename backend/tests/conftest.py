@@ -6,9 +6,9 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from file_sorter.app import create_app
-from file_sorter.db.engine import get_session
-from file_sorter.db.models import Base
+from cabinet.app import create_app
+from cabinet.db.engine import get_session
+from cabinet.db.models import Base
 
 # Use in-memory SQLite for tests
 TEST_DB_URL = "sqlite+aiosqlite://"

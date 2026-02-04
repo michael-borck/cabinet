@@ -1,8 +1,8 @@
-from file_sorter.llm.anthropic import AnthropicProvider
-from file_sorter.llm.base import LLMProvider
-from file_sorter.llm.gemini import GeminiProvider
-from file_sorter.llm.ollama import OllamaProvider
-from file_sorter.llm.openai_provider import OpenAIProvider
+from cabinet.llm.anthropic import AnthropicProvider
+from cabinet.llm.base import LLMProvider
+from cabinet.llm.gemini import GeminiProvider
+from cabinet.llm.ollama import OllamaProvider
+from cabinet.llm.openai_provider import OpenAIProvider
 
 _PROVIDER_MAP: dict[str, type] = {
     "anthropic": AnthropicProvider,

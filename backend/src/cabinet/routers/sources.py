@@ -8,11 +8,11 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from file_sorter.db.engine import async_session_factory, get_session
-from file_sorter.db.repositories import JobRepository, SourceRepository
-from file_sorter.schemas import JobResponse, ScanRequest, SourceCreate, SourceResponse
-from file_sorter.services.pipeline import PipelineService
-from file_sorter.services.scanner import ScannerService
+from cabinet.db.engine import async_session_factory, get_session
+from cabinet.db.repositories import JobRepository, SourceRepository
+from cabinet.schemas import JobResponse, ScanRequest, SourceCreate, SourceResponse
+from cabinet.services.pipeline import PipelineService
+from cabinet.services.scanner import ScannerService
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 

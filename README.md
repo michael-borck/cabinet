@@ -51,7 +51,7 @@ npm run dev
 
 ```bash
 cd backend
-uv run uvicorn file_sorter.app:create_app --factory --port 8420
+uv run uvicorn cabinet.app:create_app --factory --port 8420
 ```
 
 ### Tests

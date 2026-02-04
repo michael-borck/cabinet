@@ -5,10 +5,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from file_sorter.db.engine import get_session
-from file_sorter.db.repositories import LLMConfigRepository
-from file_sorter.llm.factory import create_provider
-from file_sorter.schemas import LLMConfigCreate, LLMConfigResponse, LLMTestResult
+from cabinet.db.engine import get_session
+from cabinet.db.repositories import LLMConfigRepository
+from cabinet.llm.factory import create_provider
+from cabinet.schemas import LLMConfigCreate, LLMConfigResponse, LLMTestResult
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 

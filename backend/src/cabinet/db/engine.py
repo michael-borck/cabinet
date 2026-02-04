@@ -14,26 +14,26 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from file_sorter.db.models import Base
+from cabinet.db.models import Base
 
 # ---------------------------------------------------------------------------
 # Database path configuration
 # ---------------------------------------------------------------------------
 # Resolve the database file path from the DATABASE_URL environment variable.
 # Falls back to a default location relative to the project root.
-# Expected format: a plain file path (e.g. "/data/file_sorter.db") or an
+# Expected format: a plain file path (e.g. "/data/cabinet.db") or an
 # SQLAlchemy-style URL ("sqlite+aiosqlite:///...").  When a plain path is
 # provided it is automatically wrapped in the async dialect prefix.
 # ---------------------------------------------------------------------------
 
 _DEFAULT_DB_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "data", "file_sorter.db"
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "data", "cabinet.db"
 )
 
 
 def _resolve_database_url() -> str:
     """Build the async SQLAlchemy database URL from configuration."""
-    raw: str = os.environ.get("FILE_SORTER_DB_PATH", _DEFAULT_DB_PATH)
+    raw: str = os.environ.get("CABINET_DB_PATH", _DEFAULT_DB_PATH)
     if raw.startswith("sqlite"):
         # Already a full URL; make sure it uses the async driver.
         return raw.replace("sqlite://", "sqlite+aiosqlite://", 1)

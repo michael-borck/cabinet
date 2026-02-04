@@ -1,4 +1,4 @@
-from file_sorter.extractors.registry import get_extractor, get_supported_extensions
+from cabinet.extractors.registry import get_extractor, get_supported_extensions
 
 
 def test_get_extractor_for_text():

@@ -5,10 +5,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from file_sorter.db.engine import get_session
-from file_sorter.db.models import FileCategory
-from file_sorter.db.repositories import CategoryRepository, FileRepository
-from file_sorter.schemas import (
+from cabinet.db.engine import get_session
+from cabinet.db.models import FileCategory
+from cabinet.db.repositories import CategoryRepository, FileRepository
+from cabinet.schemas import (
     CategoryBrief,
     FileCategoryAssign,
     FileListResponse,

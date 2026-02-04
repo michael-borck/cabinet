@@ -1,10 +1,10 @@
 import pytest
 
-from file_sorter.llm.anthropic import AnthropicProvider
-from file_sorter.llm.factory import create_provider
-from file_sorter.llm.gemini import GeminiProvider
-from file_sorter.llm.ollama import OllamaProvider
-from file_sorter.llm.openai_provider import OpenAIProvider
+from cabinet.llm.anthropic import AnthropicProvider
+from cabinet.llm.factory import create_provider
+from cabinet.llm.gemini import GeminiProvider
+from cabinet.llm.ollama import OllamaProvider
+from cabinet.llm.openai_provider import OpenAIProvider
 
 
 def test_create_anthropic_provider():

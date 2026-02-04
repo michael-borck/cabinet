@@ -7,11 +7,11 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from file_sorter.config import get_settings
-from file_sorter.db.models import File, Job, LLMConfig
-from file_sorter.extractors.base import ExtractionResult
-from file_sorter.extractors.registry import get_extractor
-from file_sorter.llm.factory import create_provider
+from cabinet.config import get_settings
+from cabinet.db.models import File, Job, LLMConfig
+from cabinet.extractors.base import ExtractionResult
+from cabinet.extractors.registry import get_extractor
+from cabinet.llm.factory import create_provider
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ class PipelineService:
             return
 
         # Build the provider and delegate to CategorizationService -------------
-        from file_sorter.services.categorization import CategorizationService
+        from cabinet.services.categorization import CategorizationService
 
         provider = create_provider(
             provider=llm_config.provider,
