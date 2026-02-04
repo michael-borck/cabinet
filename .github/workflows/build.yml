@@ -42,7 +42,10 @@ jobs:
           cd backend
           python -m pip install --upgrade pip
           pip install pyinstaller
+          pip install greenlet
           pip install -e .
+          # Verify greenlet is installed with its C extension
+          python -c "import greenlet; print(f'greenlet {greenlet.__version__} at {greenlet.__file__}')"
         shell: bash
 
       - name: Build Python backend with PyInstaller
@@ -82,7 +85,9 @@ jobs:
             --hidden-import sqlalchemy \
             --hidden-import sqlalchemy.dialects.sqlite \
             --hidden-import aiosqlite \
+            --hidden-import greenlet \
             --collect-all greenlet \
+            --collect-binaries greenlet \
             --hidden-import sse_starlette \
             --hidden-import pymupdf \
             --hidden-import pymupdf4llm \
