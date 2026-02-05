@@ -1,9 +1,36 @@
 import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
 import { startBackend, stopBackend } from './backend'
 
 let mainWindow: BrowserWindow | null = null
+
+// Auto-updater configuration
+autoUpdater.autoDownload = false
+autoUpdater.autoInstallOnAppQuit = true
+
+function setupAutoUpdater(): void {
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('updater:update-available', info)
+  })
+
+  autoUpdater.on('update-not-available', (info) => {
+    mainWindow?.webContents.send('updater:update-not-available', info)
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('updater:download-progress', progress)
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    mainWindow?.webContents.send('updater:update-downloaded', info)
+  })
+
+  autoUpdater.on('error', (error) => {
+    mainWindow?.webContents.send('updater:error', error.message)
+  })
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -21,6 +48,13 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+
+    // Check for updates 3 seconds after showing the window (skip in dev)
+    if (!is.dev) {
+      setTimeout(() => {
+        autoUpdater.checkForUpdates()
+      }, 3000)
+    }
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -41,6 +75,7 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  setupAutoUpdater()
   await startBackend()
   createWindow()
 
@@ -68,4 +103,17 @@ ipcMain.handle('reveal-in-finder', async (_event, filePath: string) => {
 
 ipcMain.handle('open-file', async (_event, filePath: string) => {
   shell.openPath(filePath)
+})
+
+// Updater IPC handlers
+ipcMain.handle('updater:check', () => {
+  autoUpdater.checkForUpdates()
+})
+
+ipcMain.handle('updater:download', () => {
+  autoUpdater.downloadUpdate()
+})
+
+ipcMain.handle('updater:install', () => {
+  autoUpdater.quitAndInstall()
 })

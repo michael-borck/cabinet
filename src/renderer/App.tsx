@@ -7,6 +7,7 @@ import { FileDetailsPanel } from '@/components/file-details/FileDetailsPanel'
 import { SearchBar } from '@/components/search/SearchBar'
 import { SettingsDialog } from '@/components/settings/SettingsDialog'
 import { SyncProgress } from '@/components/progress/SyncProgress'
+import { UpdateNotification } from '@/components/UpdateNotification'
 import { useUIStore } from '@/stores/uiStore'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { Button } from '@/components/ui/button'
@@ -55,6 +56,7 @@ function App(): React.JSX.Element {
       <div className="flex h-8 shrink-0 items-center justify-between border-t bg-muted/50 px-4 text-xs text-muted-foreground">
         <SyncProgress />
         <div className="flex items-center gap-2">
+          <UpdateNotification />
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={toggleTheme}>
             {theme === 'light' ? <Moon className="h-3 w-3" /> : <Sun className="h-3 w-3" />}
           </Button>

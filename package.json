@@ -38,7 +38,8 @@
     "react-resizable-panels": "^2.1.0",
     "sonner": "^1.7.0",
     "tailwind-merge": "^2.6.0",
-    "zustand": "^5.0.0"
+    "zustand": "^5.0.0",
+    "electron-updater": "^6.3.0"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.0",
