@@ -1,5 +1,9 @@
 # Cabinet
 
+<!-- BADGES:START -->
+[![ai](https://img.shields.io/badge/-ai-ff6f00?style=flat-square)](https://github.com/topics/ai) [![categorization](https://img.shields.io/badge/-categorization-blue?style=flat-square)](https://github.com/topics/categorization) [![desktop-app](https://img.shields.io/badge/-desktop--app-blue?style=flat-square)](https://github.com/topics/desktop-app) [![document-processing](https://img.shields.io/badge/-document--processing-blue?style=flat-square)](https://github.com/topics/document-processing) [![electron](https://img.shields.io/badge/-electron-47848f?style=flat-square)](https://github.com/topics/electron) [![fastapi](https://img.shields.io/badge/-fastapi-009688?style=flat-square)](https://github.com/topics/fastapi) [![file-management](https://img.shields.io/badge/-file--management-blue?style=flat-square)](https://github.com/topics/file-management) [![machine-learning](https://img.shields.io/badge/-machine--learning-ff6f00?style=flat-square)](https://github.com/topics/machine-learning) [![python](https://img.shields.io/badge/-python-3776ab?style=flat-square)](https://github.com/topics/python) [![react](https://img.shields.io/badge/-react-61dafb?style=flat-square)](https://github.com/topics/react)
+<!-- BADGES:END -->
+
 A desktop app that uses AI to automatically categorize your files into smart virtual folders. Point it at a directory, and Cabinet extracts text from your documents, sends them to an LLM, and organizes everything into a clean category tree -- without moving a single file.
 
 ## Features
