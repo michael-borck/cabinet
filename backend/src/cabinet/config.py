@@ -4,6 +4,10 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./cabinet.db"
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    # Shared secret required on every API request (except /health) when set.
+    # The Electron main process generates one per app launch and injects it
+    # into both the backend process and the renderer.
+    api_token: str | None = None
     log_level: str = "info"
     extraction_max_chars: int = 50000
     categorization_batch_size: int = 10

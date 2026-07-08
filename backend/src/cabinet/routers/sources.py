@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.db.engine import async_session_factory, get_session
 from cabinet.db.repositories import JobRepository, SourceRepository
-from cabinet.schemas import JobResponse, ScanRequest, SourceCreate, SourceResponse
+from cabinet.schemas import (
+    JobResponse,
+    ScanRequest,
+    SourceCreate,
+    SourceResponse,
+    SourceUpdate,
+)
 from cabinet.services.pipeline import PipelineService
 from cabinet.services.scanner import ScannerService
 
@@ -45,7 +51,30 @@ async def create_source(
         path=resolved,
         label=body.label,
         recursive=body.recursive,
+        exclude_patterns=body.exclude_patterns,
     )
+    return source
+
+
+@router.patch("/{source_id}", response_model=SourceResponse)
+async def update_source(
+    source_id: int,
+    body: SourceUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    """Update a source's label, recursive flag, or exclusion patterns.
+
+    Only fields present in the request body are changed. Exclusions apply on
+    the next scan; already-indexed files matching a new pattern are marked
+    ``missing`` by that scan.
+    """
+    fields = body.model_dump(exclude_unset=True)
+    source = await SourceRepository.update(session, source_id, **fields)
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source {source_id} not found",
+        )
     return source
 
 
@@ -71,7 +100,7 @@ async def _run_scan_and_pipeline(source_id: int, mode: str, job_id: int) -> None
     async with async_session_factory() as session:
         try:
             scanner = ScannerService(session)
-            await scanner.scan_source(source_id, mode=mode)
+            await scanner.scan_source(source_id, mode=mode, job_id=job_id)
             await session.commit()
         except Exception:
             await session.rollback()

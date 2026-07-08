@@ -59,7 +59,7 @@ async def list_files(
     extension: str | None = Query(None),
     source_id: int | None = Query(None),
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200),
+    per_page: int = Query(50, ge=1, le=500),
     sort_by: str = Query("created_at"),
     session: AsyncSession = Depends(get_session),
 ):
@@ -76,13 +76,8 @@ async def list_files(
         limit=per_page,
     )
 
-    # Eagerly load categories for each file in the response.
-    file_responses: list[FileResponse] = []
-    for f in files:
-        # list_files doesn't eager-load categories, so fetch individually.
-        detailed = await FileRepository.get_by_id(session, f.id)
-        if detailed is not None:
-            file_responses.append(_build_file_response(detailed))
+    # Categories are eager-loaded by list_files; no per-file queries needed.
+    file_responses = [_build_file_response(f) for f in files]
 
     return FileListResponse(
         files=file_responses,

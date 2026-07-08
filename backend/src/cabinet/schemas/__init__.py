@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 # ---------------------------------------------------------------------------
 # Pagination
@@ -18,10 +18,28 @@ class PaginationParams(BaseModel):
 # Source schemas
 # ---------------------------------------------------------------------------
 
+def _clean_patterns(value: list[str] | None) -> list[str] | None:
+    """Strip whitespace and drop empty entries; preserve None (field omitted)."""
+    if value is None:
+        return None
+    return [p.strip() for p in value if p.strip()]
+
+
 class SourceCreate(BaseModel):
     path: str
     label: str | None = None
     recursive: bool = True
+    exclude_patterns: list[str] = Field(default_factory=list)
+
+    _clean = field_validator("exclude_patterns")(_clean_patterns)
+
+
+class SourceUpdate(BaseModel):
+    label: str | None = None
+    recursive: bool | None = None
+    exclude_patterns: list[str] | None = None
+
+    _clean = field_validator("exclude_patterns")(_clean_patterns)
 
 
 class SourceResponse(BaseModel):
@@ -31,8 +49,14 @@ class SourceResponse(BaseModel):
     path: str
     label: str | None
     recursive: bool
+    exclude_patterns: list[str] = Field(default_factory=list)
     last_scanned_at: datetime | None
     created_at: datetime
+
+    @field_validator("exclude_patterns", mode="before")
+    @classmethod
+    def _none_to_empty(cls, value: list[str] | None) -> list[str]:
+        return value or []
 
 
 class ScanRequest(BaseModel):
@@ -170,7 +194,8 @@ class LLMConfigResponse(BaseModel):
     model: str
     base_url: str | None
     is_active: bool
-    api_key: str | None = None
+    # Never serialized -- clients only see the derived ``api_key_set`` flag.
+    api_key: str | None = Field(default=None, exclude=True)
     created_at: datetime
 
     @computed_field  # type: ignore[prop-decorator]

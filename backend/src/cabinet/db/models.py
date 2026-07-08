@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Float,
@@ -29,6 +30,9 @@ class Source(Base):
     path: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     recursive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # User-defined glob excludes for the scanner; NULL means none. Built-in
+    # default exclusions (node_modules, __pycache__, ...) live in the scanner.
+    exclude_patterns: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
@@ -46,6 +50,9 @@ class Source(Base):
 class File(Base):
     __tablename__ = "files"
     __table_args__ = (
+        # Unique per source, not globally: overlapping sources may legitimately
+        # index the same file, each under its own source.
+        Index("ix_files_source_path", "source_id", "path", unique=True),
         Index("ix_files_source_id", "source_id"),
         Index("ix_files_status", "status"),
         Index("ix_files_extension", "extension"),
@@ -56,7 +63,7 @@ class File(Base):
     source_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("sources.id", ondelete="CASCADE"), nullable=False
     )
-    path: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    path: Mapped[str] = mapped_column(String, nullable=False)
     filename: Mapped[str] = mapped_column(String, nullable=False)
     extension: Mapped[str | None] = mapped_column(String, nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -83,13 +90,18 @@ class File(Base):
 class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (
+        # Slugs are unique per parent, not globally: "Reports" may exist under
+        # both "Finance" and "Projects". NULL parents are distinct in SQLite
+        # unique indexes, so top-level dedup is enforced by the get-or-create
+        # lookups, which always run in the same transaction.
+        Index("ix_categories_parent_slug", "parent_id", "slug", unique=True),
         Index("ix_categories_parent_id", "parent_id"),
-        Index("ix_categories_slug", "slug", unique=True),
+        Index("ix_categories_slug", "slug"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    slug: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String, nullable=False)
     parent_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
     )

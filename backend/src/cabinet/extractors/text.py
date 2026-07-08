@@ -18,10 +18,11 @@ class TextExtractor:
     async def extract(self, file_path: str, max_chars: int = 50000) -> ExtractionResult:
         """Extract text content from a plain text or source code file."""
         try:
-            text = await asyncio.to_thread(self._read_file, file_path)
+            # Read one char past the limit so truncation is detectable without
+            # pulling a multi-GB file into memory just to slice it.
+            text = await asyncio.to_thread(self._read_file, file_path, max_chars + 1)
 
-            full_length = len(text)
-            truncated = full_length > max_chars
+            truncated = len(text) > max_chars
             if truncated:
                 text = text[:max_chars]
 
@@ -40,11 +41,11 @@ class TextExtractor:
             )
 
     @staticmethod
-    def _read_file(file_path: str) -> str:
-        """Read file with UTF-8, falling back to latin-1."""
+    def _read_file(file_path: str, limit: int) -> str:
+        """Read up to *limit* characters with UTF-8, falling back to latin-1."""
         try:
             with open(file_path, encoding="utf-8") as f:
-                return f.read()
+                return f.read(limit)
         except UnicodeDecodeError:
             with open(file_path, encoding="latin-1") as f:
-                return f.read()
+                return f.read(limit)

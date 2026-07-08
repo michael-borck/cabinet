@@ -45,28 +45,43 @@ class PipelineService:
             batch_size = self._settings.categorization_batch_size
 
         # Load the job --------------------------------------------------------
-        result = await self._session.execute(
-            select(Job).where(Job.id == job_id)
-        )
-        job = result.scalar_one_or_none()
+        job = await self._session.get(Job, job_id)
         if job is None:
             raise ValueError(f"Job with id={job_id} not found")
+        if job.status == "cancelled":
+            logger.info("Job %d already cancelled; skipping pipeline", job_id)
+            return
 
         # Determine which files to process ------------------------------------
+        # "extracted" files are retried: they were extracted in a previous run
+        # whose categorization failed or skipped them (text is ephemeral, so
+        # they go through extraction again).
         query = (
             select(File)
-            .where(File.source_id == job.source_id, File.status == "pending")
+            .where(
+                File.source_id == job.source_id,
+                File.status.in_(("pending", "extracted")),
+            )
             .order_by(File.id)
         )
         result = await self._session.execute(query)
         pending_files: list[File] = list(result.scalars().all())
 
         job.total_files = len(pending_files)
+        job.processed_files = 0
         job.status = "running"
-        await self._session.flush()
+        # Commit per batch (not one run-long transaction): progress becomes
+        # visible to other sessions, the SQLite write lock is released while
+        # the LLM call is in flight, and a crash loses one batch, not the run.
+        await self._session.commit()
 
-        # Process in batches --------------------------------------------------
+        cancelled = False
         for batch_start in range(0, len(pending_files), batch_size):
+            if await self._job_cancelled(job):
+                cancelled = True
+                logger.info("Job %d cancelled; stopping pipeline", job.id)
+                break
+
             batch = pending_files[batch_start : batch_start + batch_size]
 
             # -- Extraction ---------------------------------------------------
@@ -90,44 +105,61 @@ class PipelineService:
                         job, f"[extract] file_id={file.id}: {exc}"
                     )
 
-            await self._session.flush()
-
             # -- Categorization ------------------------------------------------
             if extracted_batch:
                 try:
-                    await self._categorize_batch(
+                    categorized_ids = await self._categorize_batch(
                         extracted_batch, extracted_texts
                     )
-                    for file in extracted_batch:
-                        if file.status == "extracted":
-                            file.status = "categorized"
                 except Exception as exc:
                     logger.exception(
                         "Categorization failed for batch starting at index %d",
                         batch_start,
                     )
+                    # The session may hold partial writes from the failed
+                    # batch; discard them and re-record the error on the job.
+                    await self._session.rollback()
+                    await self._session.refresh(job)
                     job.error_count += 1
                     _append_error_log(
                         job,
                         f"[categorize] batch {batch_start}: {exc}",
                     )
+                else:
+                    if categorized_ids is not None:
+                        # Only files the LLM actually returned assignments for
+                        # are done; the rest stay "extracted" and are retried
+                        # on the next run. categorized_ids is None when no LLM
+                        # is configured -- everything stays "extracted".
+                        for file in extracted_batch:
+                            if file.id in categorized_ids:
+                                file.status = "categorized"
 
             # -- Update progress -----------------------------------------------
             job.processed_files = min(
                 batch_start + len(batch), len(pending_files)
             )
-            await self._session.flush()
+            await self._session.commit()
 
-        # Finalize job --------------------------------------------------------
-        job.status = "completed" if job.error_count == 0 else "completed_with_errors"
-        await self._session.flush()
+        # Finalize job (re-check so a cancel during the last batch sticks) ----
+        if not cancelled and not await self._job_cancelled(job):
+            job.status = (
+                "completed" if job.error_count == 0 else "completed_with_errors"
+            )
+            await self._session.commit()
 
         logger.info(
-            "Pipeline finished for job %d: processed=%d, errors=%d",
+            "Pipeline finished for job %d: processed=%d, errors=%d%s",
             job.id,
             job.processed_files,
             job.error_count,
+            " (cancelled)" if cancelled else "",
         )
+
+    async def _job_cancelled(self, job: Job) -> bool:
+        """Re-read the job's status so a cancel from another session is seen."""
+        await self._session.refresh(job, attribute_names=["status"])
+        return job.status == "cancelled"
 
     # ------------------------------------------------------------------
     # Extraction
@@ -150,9 +182,16 @@ class PipelineService:
             )
             return None
 
-        return await extractor.extract(
+        result = await extractor.extract(
             file.path, max_chars=self._settings.extraction_max_chars
         )
+        # Extractors report failures via metadata rather than raising; surface
+        # them so the file is marked "error" and the job's error count is real,
+        # instead of categorizing an unreadable file from its filename alone.
+        error = result.metadata.get("error")
+        if error:
+            raise RuntimeError(f"extraction failed: {error}")
+        return result
 
     # ------------------------------------------------------------------
     # Categorization
@@ -160,11 +199,13 @@ class PipelineService:
 
     async def _categorize_batch(
         self, files: list[File], extracted_texts: dict[int, str]
-    ) -> None:
+    ) -> set[int] | None:
         """Categorize a batch of files using the active LLM config.
 
-        If no active LLM configuration is present this method silently
-        returns without error, leaving files in the ``"extracted"`` state.
+        Returns:
+            The ids of files that received at least one category assignment,
+            or *None* when no active LLM configuration exists (files then stay
+            in the ``"extracted"`` state).
         """
         # Find the active LLM configuration -----------------------------------
         result = await self._session.execute(
@@ -173,7 +214,7 @@ class PipelineService:
         llm_config = result.scalar_one_or_none()
         if llm_config is None:
             logger.debug("No active LLM configuration; skipping categorization")
-            return
+            return None
 
         # Build the provider and delegate to CategorizationService -------------
         from cabinet.services.categorization import CategorizationService
@@ -186,7 +227,9 @@ class PipelineService:
         )
 
         categorizer = CategorizationService(self._session, provider)
-        await categorizer.categorize_files(files, extracted_texts=extracted_texts)
+        return await categorizer.categorize_files(
+            files, extracted_texts=extracted_texts
+        )
 
 
 # --------------------------------------------------------------------------

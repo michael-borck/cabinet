@@ -32,7 +32,7 @@ class CategorizationService:
         self,
         files: list[File],
         extracted_texts: dict[int, str] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> set[int]:
         """Categorize a list of files via the configured LLM.
 
         Existing *manual* category assignments are preserved.  AI-suggested
@@ -45,10 +45,11 @@ class CategorizationService:
                 ``file.extracted_text``.
 
         Returns:
-            The parsed LLM response ``files`` list (one entry per input file).
+            The ids of files that received at least one category assignment.
+            Files the LLM omitted or returned malformed entries for are absent.
         """
         if not files:
-            return []
+            return set()
 
         if extracted_texts is None:
             extracted_texts = {}
@@ -66,9 +67,7 @@ class CategorizationService:
         llm_result = await self._provider.complete_json(system_prompt, user_prompt)
 
         # Resolve categories and persist assignments --------------------------
-        await self._resolve_categories(files, llm_result)
-
-        return llm_result.get("files", [])
+        return await self._resolve_categories(files, llm_result)
 
     # ------------------------------------------------------------------
     # Prompt building
@@ -156,16 +155,38 @@ class CategorizationService:
         self,
         files: list[File],
         llm_result: dict[str, Any],
-    ) -> None:
+    ) -> set[int]:
         """Parse the LLM response and create/update category assignments.
 
         Manual assignments (``is_manual=True``) on each file are preserved.
         Previous AI assignments are removed and replaced with the new ones.
-        """
-        file_entries: list[dict[str, Any]] = llm_result.get("files", [])
+        Entries are processed independently and defensively: one malformed
+        entry must not abort the batch, and a file's old assignments are only
+        deleted after its new ones resolved successfully.
 
-        for entry in file_entries:
-            file_index: int = entry.get("file_index", -1)
+        Returns:
+            The ids of files that received at least one assignment.
+        """
+        raw_entries = llm_result.get("files", [])
+        if not isinstance(raw_entries, list):
+            logger.warning("LLM response 'files' is not a list; skipping batch")
+            return set()
+
+        assigned: set[int] = set()
+
+        for entry in raw_entries:
+            if not isinstance(entry, dict):
+                logger.warning("LLM returned non-object file entry; skipping")
+                continue
+
+            try:
+                file_index = int(entry.get("file_index", -1))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "LLM returned non-integer file_index=%r; skipping",
+                    entry.get("file_index"),
+                )
+                continue
             if file_index < 0 or file_index >= len(files):
                 logger.warning(
                     "LLM returned invalid file_index=%d (have %d files); skipping",
@@ -175,48 +196,73 @@ class CategorizationService:
                 continue
 
             file = files[file_index]
-            categories_data: list[dict[str, Any]] = entry.get("categories", [])
-
-            # Remove existing AI-suggested assignments for this file -----------
-            result = await self._session.execute(
-                select(FileCategory).where(
-                    FileCategory.file_id == file.id,
-                    FileCategory.is_manual == False,  # noqa: E712
+            categories_data = entry.get("categories")
+            if not isinstance(categories_data, list):
+                logger.warning(
+                    "LLM returned no categories list for file %d; skipping", file.id
                 )
-            )
-            old_ai_assignments: list[FileCategory] = list(result.scalars().all())
-            for old in old_ai_assignments:
-                await self._session.delete(old)
+                continue
 
-            # Create new assignments ------------------------------------------
-            for cat_data in categories_data:
-                cat_name: str = cat_data.get("name", "").strip()
-                confidence: float = cat_data.get("confidence", 0.0)
-                if not cat_name:
+            try:
+                # Resolve all new categories BEFORE touching old assignments,
+                # so a failure here leaves the file's existing state intact.
+                resolved: list[tuple[Category, float]] = []
+                for cat_data in categories_data:
+                    if not isinstance(cat_data, dict):
+                        continue
+                    cat_name = str(cat_data.get("name") or "").strip()
+                    if not cat_name:
+                        continue
+                    try:
+                        confidence = float(cat_data.get("confidence", 0.0))
+                    except (TypeError, ValueError):
+                        confidence = 0.0
+                    category = await self._get_or_create_from_path(cat_name)
+                    resolved.append((category, confidence))
+
+                if not resolved:
                     continue
 
-                category = await self._get_or_create_from_path(cat_name)
-
-                # Check if a manual assignment already exists for this pair
-                existing = await self._session.execute(
+                # Remove existing AI-suggested assignments for this file -------
+                result = await self._session.execute(
                     select(FileCategory).where(
                         FileCategory.file_id == file.id,
-                        FileCategory.category_id == category.id,
+                        FileCategory.is_manual == False,  # noqa: E712
                     )
                 )
-                if existing.scalar_one_or_none() is not None:
-                    # Manual assignment exists; don't duplicate
-                    continue
+                for old in result.scalars().all():
+                    await self._session.delete(old)
 
-                fc = FileCategory(
-                    file_id=file.id,
-                    category_id=category.id,
-                    confidence=confidence,
-                    is_manual=False,
+                # Create new assignments ---------------------------------------
+                for category, confidence in resolved:
+                    # Skip pairs that already exist (e.g. a manual assignment,
+                    # or the LLM naming the same category twice).
+                    existing = await self._session.execute(
+                        select(FileCategory).where(
+                            FileCategory.file_id == file.id,
+                            FileCategory.category_id == category.id,
+                        )
+                    )
+                    if existing.scalar_one_or_none() is not None:
+                        continue
+
+                    fc = FileCategory(
+                        file_id=file.id,
+                        category_id=category.id,
+                        confidence=confidence,
+                        is_manual=False,
+                    )
+                    self._session.add(fc)
+
+                assigned.add(file.id)
+            except Exception:
+                logger.exception(
+                    "Failed to apply LLM categories for file %d; skipping", file.id
                 )
-                self._session.add(fc)
+                continue
 
         await self._session.flush()
+        return assigned
 
     async def _get_or_create_from_path(self, path_str: str) -> Category:
         """Resolve a ``"Parent > Child"`` path to a :class:`Category`.

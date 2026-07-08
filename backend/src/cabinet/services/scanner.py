@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
 import os
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +17,66 @@ from cabinet.db.models import File, Job, Source
 from cabinet.utils.hashing import compute_file_hash
 
 logger = logging.getLogger(__name__)
+
+# Directories that are never worth categorizing: development artifacts and
+# OS metadata. Matched by exact name at any depth (dot-prefixed names are
+# already skipped separately). Users cannot re-include these; per-source
+# ``exclude_patterns`` only add to the list.
+DEFAULT_EXCLUDED_DIRS = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        "venv",
+        "virtualenv",
+        "dist",
+        "build",
+        "target",
+        "vendor",
+        "bower_components",
+        "coverage",
+        "htmlcov",
+        "site-packages",
+        "__MACOSX",
+        "$RECYCLE.BIN",
+        "System Volume Information",
+    }
+)
+
+# Junk files skipped by exact name (case-insensitive).
+DEFAULT_EXCLUDED_FILES = frozenset({"thumbs.db", "desktop.ini"})
+
+# Office lock/temp files ("~$Report.docx").
+_TEMP_FILE_PREFIX = "~$"
+
+
+def _matches_patterns(name: str, rel_path: str, patterns: Sequence[str]) -> bool:
+    """Return True when a user-supplied glob matches the entry.
+
+    Patterns are tested against both the bare name (``drafts``, ``*.log``)
+    and the path relative to the source root with ``/`` separators
+    (``projects/old*``), so simple patterns apply at any depth.
+    """
+    return any(
+        fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(rel_path, pattern)
+        for pattern in patterns
+    )
+
+
+def _dir_excluded(name: str, rel_path: str, patterns: Sequence[str]) -> bool:
+    return (
+        name.startswith(".")
+        or name in DEFAULT_EXCLUDED_DIRS
+        or _matches_patterns(name, rel_path, patterns)
+    )
+
+
+def _file_excluded(name: str, rel_path: str, patterns: Sequence[str]) -> bool:
+    return (
+        name.startswith(".")
+        or name.startswith(_TEMP_FILE_PREFIX)
+        or name.lower() in DEFAULT_EXCLUDED_FILES
+        or _matches_patterns(name, rel_path, patterns)
+    )
 
 
 class ScannerService:
@@ -27,19 +89,23 @@ class ScannerService:
     # Public API
     # ------------------------------------------------------------------
 
-    async def scan_source(self, source_id: int, mode: str = "quick_sync") -> Job:
+    async def scan_source(
+        self, source_id: int, mode: str = "quick_sync", job_id: int | None = None
+    ) -> Job:
         """Scan a source directory and reconcile with the database.
 
         Args:
             source_id: The ID of the source to scan.
             mode: Either ``"quick_sync"`` (only new/changed files) or
                 ``"full_reindex"`` (reprocess everything).
+            job_id: An existing :class:`Job` to track this scan (created by the
+                scan endpoint). When omitted, a new job is created.
 
         Returns:
             The :class:`Job` record tracking this scan.
 
         Raises:
-            ValueError: If the source does not exist or its path is invalid.
+            ValueError: If the source or job does not exist or the path is invalid.
         """
         # Fetch the source ---------------------------------------------------
         result = await self._session.execute(
@@ -54,21 +120,31 @@ class ScannerService:
                 f"Source path does not exist or is not a directory: {source.path!r}"
             )
 
-        # Create a job record -------------------------------------------------
-        job = Job(
-            job_type=mode,
-            status="running",
-            source_id=source_id,
-            total_files=0,
-            processed_files=0,
-            error_count=0,
-        )
-        self._session.add(job)
+        # Track progress on the caller's job, or create one -------------------
+        if job_id is not None:
+            job = await self._session.get(Job, job_id)
+            if job is None:
+                raise ValueError(f"Job with id={job_id} not found")
+            job.status = "running"
+            job.total_files = 0
+            job.processed_files = 0
+        else:
+            job = Job(
+                job_type=mode,
+                status="running",
+                source_id=source_id,
+                total_files=0,
+                processed_files=0,
+                error_count=0,
+            )
+            self._session.add(job)
         await self._session.flush()  # ensure job.id is populated
 
         try:
             # Walk the filesystem ---------------------------------------------
-            found_files = await self._walk_filesystem(source.path, source.recursive)
+            found_files = await self._walk_filesystem(
+                source.path, source.recursive, source.exclude_patterns or []
+            )
             job.total_files = len(found_files)
 
             # Reconcile -------------------------------------------------------
@@ -79,7 +155,7 @@ class ScannerService:
             job.status = "completed"
 
             # Update source's last_scanned_at ----------------------------------
-            source.last_scanned_at = datetime.now(UTC)
+            source.last_scanned_at = _naive_utc_now()
 
             logger.info(
                 "Scan completed for source %d (%s): "
@@ -106,30 +182,40 @@ class ScannerService:
     # ------------------------------------------------------------------
 
     async def _walk_filesystem(
-        self, root_path: str, recursive: bool
+        self, root_path: str, recursive: bool, exclude_patterns: Sequence[str] = ()
     ) -> list[dict[str, Any]]:
         """Walk the filesystem and collect file metadata.
 
-        Hidden files and directories (names starting with ``"."``) are skipped.
+        Skipped entries: hidden files and directories (names starting with
+        ``"."``), the built-in default exclusions (``node_modules``,
+        ``__pycache__``, junk files, ...), and anything matching the
+        source's ``exclude_patterns`` globs.
 
         Returns:
             A list of dicts with keys: ``path``, ``filename``, ``extension``,
             ``size_bytes``, ``file_modified_at``.
         """
 
+        def _rel(full_path: str) -> str:
+            return os.path.relpath(full_path, root_path).replace(os.sep, "/")
+
         def _scan() -> list[dict[str, Any]]:
             files: list[dict[str, Any]] = []
 
             if recursive:
                 for dirpath, dirnames, filenames in os.walk(root_path):
-                    # Skip hidden directories in-place so os.walk won't descend
+                    # Prune in-place so os.walk won't descend into them.
                     dirnames[:] = [
-                        d for d in dirnames if not d.startswith(".")
+                        d
+                        for d in dirnames
+                        if not _dir_excluded(
+                            d, _rel(os.path.join(dirpath, d)), exclude_patterns
+                        )
                     ]
                     for fname in filenames:
-                        if fname.startswith("."):
-                            continue
                         full_path = os.path.join(dirpath, fname)
+                        if _file_excluded(fname, _rel(full_path), exclude_patterns):
+                            continue
                         info = _file_info(full_path, fname)
                         if info is not None:
                             files.append(info)
@@ -141,9 +227,9 @@ class ScannerService:
                     return files
                 with entries:
                     for entry in entries:
-                        if entry.name.startswith(".") or not entry.is_file(
-                            follow_symlinks=False
-                        ):
+                        if _file_excluded(
+                            entry.name, entry.name, exclude_patterns
+                        ) or not entry.is_file(follow_symlinks=False):
                             continue
                         info = _file_info(entry.path, entry.name)
                         if info is not None:
@@ -262,5 +348,14 @@ def _file_info(full_path: str, filename: str) -> dict[str, Any] | None:
         "filename": filename,
         "extension": ext.lower() if ext else None,
         "size_bytes": stat.st_size,
-        "file_modified_at": datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+        # Naive UTC: the DateTime columns are timezone-less, and an aware
+        # value never compares equal to the naive one read back from the DB,
+        # which made every sync rehash every file.
+        "file_modified_at": datetime.fromtimestamp(stat.st_mtime, tz=UTC).replace(
+            tzinfo=None
+        ),
     }
+
+
+def _naive_utc_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)

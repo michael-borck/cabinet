@@ -30,7 +30,21 @@ from cabinet.db.models import (
 # ---------------------------------------------------------------------------
 
 def _utcnow() -> datetime:
-    return datetime.now(UTC)
+    # Naive UTC: SQLite DateTime columns are timezone-less, and mixing aware
+    # and naive values makes equality comparisons silently always-unequal.
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+_FILE_SORT_COLUMNS = {
+    "id",
+    "filename",
+    "extension",
+    "size_bytes",
+    "status",
+    "file_modified_at",
+    "created_at",
+    "updated_at",
+}
 
 
 def _slugify(value: str) -> str:
@@ -65,9 +79,28 @@ class SourceRepository:
         path: str,
         label: str | None = None,
         recursive: bool = True,
+        exclude_patterns: list[str] | None = None,
     ) -> Source:
-        source = Source(path=path, label=label, recursive=recursive)
+        source = Source(
+            path=path,
+            label=label,
+            recursive=recursive,
+            exclude_patterns=exclude_patterns or None,
+        )
         session.add(source)
+        await session.flush()
+        return source
+
+    @staticmethod
+    async def update(
+        session: AsyncSession, source_id: int, **fields: object
+    ) -> Source | None:
+        """Apply the given fields to a source; returns None when it doesn't exist."""
+        source = await session.get(Source, source_id)
+        if source is None:
+            return None
+        for name, value in fields.items():
+            setattr(source, name, value)
         await session.flush()
         return source
 
@@ -126,7 +159,9 @@ class FileRepository:
         tuple
             ``(rows, total_count)``
         """
-        base = select(File)
+        base = select(File).options(
+            selectinload(File.categories).joinedload(FileCategory.category)
+        )
         count_base = select(func.count(File.id))
 
         if category_id is not None:
@@ -144,8 +179,11 @@ class FileRepository:
             base = base.where(File.source_id == source_id)
             count_base = count_base.where(File.source_id == source_id)
 
-        # Sorting
-        sort_column = getattr(File, sort_by, File.created_at)
+        # Sorting -- allowlisted so arbitrary model attributes (relationships,
+        # methods) can't be resolved into the query.
+        if sort_by not in _FILE_SORT_COLUMNS:
+            sort_by = "created_at"
+        sort_column = getattr(File, sort_by)
         order = sort_column.desc() if sort_dir == "desc" else sort_column.asc()
         base = base.order_by(order).offset(offset).limit(limit)
 
@@ -339,11 +377,37 @@ class CategoryRepository:
         category = await session.get(Category, category_id)
         if category is None:
             return None
+
+        new_parent_id = kwargs.get("parent_id")
+        if new_parent_id is not None:
+            await CategoryRepository._ensure_no_cycle(
+                session, category_id, new_parent_id
+            )
+
         for key, value in kwargs.items():
             if hasattr(category, key):
                 setattr(category, key, value)
         await session.flush()
         return category
+
+    @staticmethod
+    async def _ensure_no_cycle(
+        session: AsyncSession, category_id: int, new_parent_id: int
+    ) -> None:
+        """Raise ``ValueError`` if parenting *category_id* under
+        *new_parent_id* would create a cycle (including self-parenting)."""
+        current_id: int | None = new_parent_id
+        seen: set[int] = set()
+        while current_id is not None and current_id not in seen:
+            if current_id == category_id:
+                raise ValueError(
+                    "Cannot set parent: it would create a category cycle"
+                )
+            seen.add(current_id)
+            parent = await session.get(Category, current_id)
+            if parent is None:
+                raise ValueError(f"Parent category {current_id} not found")
+            current_id = parent.parent_id
 
     @staticmethod
     async def delete(session: AsyncSession, category_id: int) -> bool:
@@ -515,10 +579,15 @@ class JobRepository:
 
     @staticmethod
     async def cancel(session: AsyncSession, job_id: int) -> Job | None:
-        """Mark a job as ``'cancelled'``."""
+        """Mark a job as ``'cancelled'``.
+
+        Jobs already in a terminal state are returned unchanged.
+        """
         job = await session.get(Job, job_id)
         if job is None:
             return None
+        if job.status in ("completed", "completed_with_errors", "failed", "cancelled"):
+            return job
         job.status = "cancelled"
         job.updated_at = _utcnow()
         await session.flush()
