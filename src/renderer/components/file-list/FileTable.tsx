@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { FileIcon, MoreHorizontal } from 'lucide-react'
+import { AlertTriangle, FileIcon, MoreHorizontal } from 'lucide-react'
 import { useAllFiles } from '@/hooks/useFiles'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { cn } from '@/lib/utils'
@@ -27,7 +27,7 @@ export function FileTable() {
   const { selectedFileId, setSelectedFile } = useSelectionStore()
   const params: Record<string, unknown> = {}
   if (selectedCategoryId) params.category_id = selectedCategoryId
-  const { files: loadedFiles, total, isLoading, hasNextPage } = useAllFiles(params)
+  const { files: loadedFiles, total, isLoading, isError, hasNextPage } = useAllFiles(params)
   const files = loadedFiles as unknown as FileItem[]
 
   const parentRef = useRef<HTMLDivElement>(null)
@@ -40,6 +40,15 @@ export function FileTable() {
 
   if (isLoading) {
     return <div className="flex items-center justify-center p-8 text-muted-foreground">Loading files...</div>
+  }
+
+  if (isError && files.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 text-destructive">
+        <AlertTriangle className="mb-2 h-8 w-8" />
+        <p>Couldn&apos;t load files — the local engine isn&apos;t responding.</p>
+      </div>
+    )
   }
 
   if (files.length === 0) {

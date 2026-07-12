@@ -53,6 +53,9 @@ export const deleteCategory = (id: number) => api.delete(`/categories/${id}`)
 export const getJobs = () => api.get('/jobs').then(r => r.data)
 export const getJob = (id: number) => api.get(`/jobs/${id}`).then(r => r.data)
 
+// Health
+export const getHealth = () => api.get('/health').then(r => r.data)
+
 // Settings
 export const getLLMConfig = () => api.get('/settings/llm').then(r => r.data)
 export const setLLMConfig = (data: { provider: string; model: string; api_key?: string; base_url?: string }) =>

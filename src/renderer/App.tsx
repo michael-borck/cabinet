@@ -1,6 +1,7 @@
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels'
 import { Moon, Sun } from 'lucide-react'
 import { Toaster } from 'sonner'
+import { BackendStatusBanner } from '@/components/BackendStatusBanner'
 import { CategoryTree } from '@/components/category-tree/CategoryTree'
 import { FileTable } from '@/components/file-list/FileTable'
 import { FileDetailsPanel } from '@/components/file-details/FileDetailsPanel'
@@ -27,6 +28,8 @@ function App(): React.JSX.Element {
       <div className="shrink-0 border-b px-4 py-2 titlebar-no-drag">
         <SearchBar />
       </div>
+
+      <BackendStatusBanner />
 
       {/* Main 3-panel layout */}
       <PanelGroup direction="horizontal" className="flex-1">

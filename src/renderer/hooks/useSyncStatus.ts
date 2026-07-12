@@ -1,11 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { getJobs } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 
 interface JobStatus {
   id: number
   status: string
+  error_count: number
 }
 
 const TERMINAL_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled'])
@@ -37,6 +39,13 @@ export function useSyncStatus() {
       // after mount and finished within one poll interval — still a transition.
       if (TERMINAL_STATUSES.has(job.status) && prev.get(job.id) !== job.status) {
         jobFinished = true
+        if (job.status === 'failed') {
+          toast.error('Sync failed — check your LLM settings and try again')
+        } else if (job.status === 'completed_with_errors') {
+          toast.warning(
+            `Sync finished, but ${job.error_count} file${job.error_count === 1 ? '' : 's'} could not be processed`
+          )
+        }
       }
     }
     if (jobFinished) {
