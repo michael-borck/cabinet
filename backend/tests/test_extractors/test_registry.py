@@ -18,6 +18,12 @@ def test_get_extractor_for_unknown():
     assert ext is None
 
 
+def test_legacy_xls_is_not_claimed():
+    """openpyxl can't read BIFF .xls; claiming it would error every such file."""
+    assert get_extractor(".xls") is None
+    assert ".xls" not in get_supported_extensions()
+
+
 def test_supported_extensions():
     exts = get_supported_extensions()
     assert ".txt" in exts

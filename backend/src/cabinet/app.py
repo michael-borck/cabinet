@@ -1,5 +1,6 @@
 """FastAPI application factory for the file-sorter backend."""
 
+import logging
 import secrets
 from contextlib import asynccontextmanager
 
@@ -8,12 +9,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from cabinet.config import get_settings
-from cabinet.db.engine import init_db
+from cabinet.db.engine import async_session_factory, init_db
+from cabinet.db.repositories import JobRepository
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    async with async_session_factory() as session:
+        swept = await JobRepository.fail_stale_jobs(session)
+        await session.commit()
+    if swept:
+        logger.info("Marked %d interrupted job(s) from a previous run as failed", swept)
     yield
 
 

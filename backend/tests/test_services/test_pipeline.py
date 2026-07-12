@@ -101,3 +101,60 @@ async def test_progress_is_committed(session: AsyncSession, tmp_path, engine):
         ).scalar_one()
         assert seen.status == "completed"
         assert seen.processed_files == 1
+
+
+async def test_failed_batch_does_not_abort_run(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    """A categorization failure in one batch must not kill later batches.
+
+    Regression test: the rollback in the failure handler expires every File
+    instance in the session, which used to crash the next batch's extraction.
+    """
+    source = Source(path=str(tmp_path), recursive=True)
+    session.add(source)
+    await session.flush()
+
+    files = []
+    for name in ("a.txt", "b.txt"):
+        target = tmp_path / name
+        target.write_text("content of " + name)
+        files.append(
+            File(
+                source_id=source.id,
+                path=str(target),
+                filename=name,
+                extension=".txt",
+                size_bytes=12,
+                status="pending",
+            )
+        )
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add_all([*files, job])
+    await session.commit()
+
+    calls: list[list[int]] = []
+
+    async def flaky_categorize(self, batch, extracted_texts):
+        calls.append([f.id for f in batch])
+        if len(calls) == 1:
+            raise RuntimeError("LLM exploded")
+        return {f.id for f in batch}
+
+    monkeypatch.setattr(PipelineService, "_categorize_batch", flaky_categorize)
+
+    pipeline = PipelineService(session)
+    await pipeline.process_pending_files(job.id, batch_size=1)
+
+    await session.refresh(job)
+    assert len(calls) == 2  # the second batch still ran
+    assert job.status == "completed_with_errors"
+    assert job.error_count == 1
+    assert "[categorize]" in (job.error_log or "")
+
+    statuses = (
+        await session.execute(select(File.status).order_by(File.id))
+    ).scalars().all()
+    # Failed batch keeps its extraction result and will retry next run;
+    # the following batch categorized normally.
+    assert statuses == ["extracted", "categorized"]

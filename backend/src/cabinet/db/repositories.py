@@ -578,6 +578,26 @@ class JobRepository:
         return job
 
     @staticmethod
+    async def fail_stale_jobs(session: AsyncSession) -> int:
+        """Mark jobs left ``'running'``/``'pending'`` by a dead process as failed.
+
+        Jobs run as in-process background tasks, so at startup no job can
+        legitimately be active; anything non-terminal was interrupted by a
+        crash or quit and would otherwise show as syncing forever.
+        """
+        stmt = (
+            update(Job)
+            .where(Job.status.in_(("running", "pending")))
+            .values(
+                status="failed",
+                error_log="interrupted: the app quit while this job was running",
+                updated_at=_utcnow(),
+            )
+        )
+        result = await session.execute(stmt)
+        return result.rowcount or 0
+
+    @staticmethod
     async def cancel(session: AsyncSession, job_id: int) -> Job | None:
         """Mark a job as ``'cancelled'``.
 

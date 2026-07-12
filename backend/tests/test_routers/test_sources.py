@@ -4,6 +4,9 @@ from pathlib import Path
 
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from cabinet.db.models import Job
 
 
 @pytest_asyncio.fixture
@@ -97,3 +100,46 @@ async def test_delete_source(client: AsyncClient, test_dir: str):
 async def test_delete_source_not_found(client: AsyncClient):
     response = await client.delete("/api/v1/sources/9999")
     assert response.status_code == 404
+
+
+async def test_scan_rejected_while_job_active(
+    client: AsyncClient, session: AsyncSession, test_dir: str
+):
+    """Only one scan may run per source: a second request must 409."""
+    create_resp = await client.post("/api/v1/sources", json={"path": test_dir})
+    source_id = create_resp.json()["id"]
+
+    session.add(Job(job_type="quick_sync", source_id=source_id, status="running"))
+    await session.commit()
+
+    response = await client.post(
+        f"/api/v1/sources/{source_id}/scan", json={"mode": "quick_sync"}
+    )
+    assert response.status_code == 409
+    assert "already running" in response.json()["detail"]
+
+
+async def test_scan_allowed_after_job_finished(
+    client: AsyncClient, session: AsyncSession, test_dir: str, monkeypatch
+):
+    """Terminal jobs don't block a new scan."""
+    # Don't actually run the background scan: it opens its own session on the
+    # global engine, not the test engine.
+    from cabinet.routers import sources as sources_router
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(sources_router, "_run_scan_and_pipeline", noop)
+
+    create_resp = await client.post("/api/v1/sources", json={"path": test_dir})
+    source_id = create_resp.json()["id"]
+
+    session.add(Job(job_type="quick_sync", source_id=source_id, status="completed"))
+    await session.commit()
+
+    response = await client.post(
+        f"/api/v1/sources/{source_id}/scan", json={"mode": "quick_sync"}
+    )
+    assert response.status_code == 201
+    assert response.json()["status"] == "pending"

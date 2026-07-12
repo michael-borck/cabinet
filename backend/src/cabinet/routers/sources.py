@@ -6,9 +6,11 @@ import os
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.db.engine import async_session_factory, get_session
+from cabinet.db.models import Job
 from cabinet.db.repositories import JobRepository, SourceRepository
 from cabinet.schemas import (
     JobResponse,
@@ -146,6 +148,19 @@ async def scan_source(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source {source_id} not found",
+        )
+
+    # One scan per source at a time: concurrent pipelines would select the
+    # same pending files and categorize them twice.
+    active = await session.execute(
+        select(Job.id)
+        .where(Job.source_id == source_id, Job.status.in_(("pending", "running")))
+        .limit(1)
+    )
+    if active.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A scan is already running for this source",
         )
 
     job = await JobRepository.create(

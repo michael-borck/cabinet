@@ -56,8 +56,12 @@ class PipelineService:
         # "extracted" files are retried: they were extracted in a previous run
         # whose categorization failed or skipped them (text is ephemeral, so
         # they go through extraction again).
+        # Only ids are held for the whole run; each batch re-fetches its File
+        # rows. A rollback expires every instance in the session, and touching
+        # an expired attribute on an AsyncSession raises MissingGreenlet — so
+        # instances must not outlive the batch they belong to.
         query = (
-            select(File)
+            select(File.id)
             .where(
                 File.source_id == job.source_id,
                 File.status.in_(("pending", "extracted")),
@@ -65,9 +69,9 @@ class PipelineService:
             .order_by(File.id)
         )
         result = await self._session.execute(query)
-        pending_files: list[File] = list(result.scalars().all())
+        pending_ids: list[int] = list(result.scalars().all())
 
-        job.total_files = len(pending_files)
+        job.total_files = len(pending_ids)
         job.processed_files = 0
         job.status = "running"
         # Commit per batch (not one run-long transaction): progress becomes
@@ -76,13 +80,18 @@ class PipelineService:
         await self._session.commit()
 
         cancelled = False
-        for batch_start in range(0, len(pending_files), batch_size):
+        for batch_start in range(0, len(pending_ids), batch_size):
             if await self._job_cancelled(job):
                 cancelled = True
                 logger.info("Job %d cancelled; stopping pipeline", job.id)
                 break
 
-            batch = pending_files[batch_start : batch_start + batch_size]
+            batch_ids = pending_ids[batch_start : batch_start + batch_size]
+            result = await self._session.execute(
+                select(File).where(File.id.in_(batch_ids)).order_by(File.id)
+            )
+            # Files deleted since the run started simply drop out of the batch.
+            batch: list[File] = list(result.scalars().all())
 
             # -- Extraction ---------------------------------------------------
             extracted_batch: list[File] = []
@@ -105,6 +114,10 @@ class PipelineService:
                         job, f"[extract] file_id={file.id}: {exc}"
                     )
 
+            # Persist extraction outcomes before the LLM call so a
+            # categorization failure can't roll them back with its own writes.
+            await self._session.commit()
+
             # -- Categorization ------------------------------------------------
             if extracted_batch:
                 try:
@@ -118,6 +131,9 @@ class PipelineService:
                     )
                     # The session may hold partial writes from the failed
                     # batch; discard them and re-record the error on the job.
+                    # This batch's File instances are expired by the rollback,
+                    # but they're not touched again — the files stay
+                    # "extracted" (committed above) and retry on the next run.
                     await self._session.rollback()
                     await self._session.refresh(job)
                     job.error_count += 1
@@ -137,7 +153,7 @@ class PipelineService:
 
             # -- Update progress -----------------------------------------------
             job.processed_files = min(
-                batch_start + len(batch), len(pending_files)
+                batch_start + len(batch_ids), len(pending_ids)
             )
             await self._session.commit()
 

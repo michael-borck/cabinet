@@ -6,9 +6,14 @@ from .base import ExtractionResult
 
 
 class XlsxExtractor:
-    """Extracts text content from Excel files."""
+    """Extracts text content from Excel files.
 
-    supported_extensions: set[str] = {".xlsx", ".xls"}
+    Only modern OOXML workbooks: openpyxl cannot read the legacy ``.xls``
+    BIFF format, so claiming it would permanently mark every ``.xls`` file
+    as an error. Unclaimed extensions are categorized from metadata instead.
+    """
+
+    supported_extensions: set[str] = {".xlsx"}
 
     async def extract(self, file_path: str, max_chars: int = 50000) -> ExtractionResult:
         """Extract text content from an Excel file using openpyxl."""
