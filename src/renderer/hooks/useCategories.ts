@@ -21,7 +21,12 @@ export function useUpdateCategory() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => updateCategory(id, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['categories'] }) },
+    // Renames show up in file badges too.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] })
+      qc.invalidateQueries({ queryKey: ['files'] })
+      qc.invalidateQueries({ queryKey: ['file'] })
+    },
   })
 }
 
@@ -29,6 +34,10 @@ export function useDeleteCategory() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: deleteCategory,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['categories'] }) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] })
+      qc.invalidateQueries({ queryKey: ['files'] })
+      qc.invalidateQueries({ queryKey: ['file'] })
+    },
   })
 }

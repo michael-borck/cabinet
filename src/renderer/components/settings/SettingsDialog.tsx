@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { Settings, X, Folder, Brain, RefreshCw, ListFilter } from 'lucide-react'
+import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart } from 'lucide-react'
 import { isAxiosError } from 'axios'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -55,13 +55,21 @@ function SourcesTab() {
     onError: (err) => { toast.error(`Failed to remove folder: ${errorDetail(err)}`) },
   })
   const scanMut = useMutation({
-    mutationFn: (id: number) => scanSource(id),
-    onSuccess: () => {
+    mutationFn: ({ id, mode }: { id: number; mode?: string }) => scanSource(id, mode),
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: queryKeys.jobs })
-      toast.success('Scan started')
+      toast.success(vars.mode === 'full_reindex' ? 'Full reindex started' : 'Scan started')
     },
     onError: (err) => { toast.error(`Failed to start scan: ${errorDetail(err)}`) },
   })
+  const fullReindex = (s: SourceRow) => {
+    const ok = window.confirm(
+      `Re-extract and re-categorize every file in "${s.label || s.path}"?\n\n` +
+        'This re-runs the AI over all files (including ones that previously errored) ' +
+        'and may take a while. Manually added categories are kept.'
+    )
+    if (ok) scanMut.mutate({ id: s.id, mode: 'full_reindex' })
+  }
   const excludesMut = useMutation({
     mutationFn: ({ id, patterns }: { id: number; patterns: string[] }) =>
       updateSource(id, { exclude_patterns: patterns }),
@@ -109,8 +117,11 @@ function SourcesTab() {
                 >
                   <ListFilter className="h-3 w-3" />
                 </Button>
-                <Button variant="ghost" size="sm" title="Rescan" disabled={scanMut.isPending} onClick={() => scanMut.mutate(s.id)}>
+                <Button variant="ghost" size="sm" title="Rescan" disabled={scanMut.isPending} onClick={() => scanMut.mutate({ id: s.id })}>
                   <RefreshCw className="h-3 w-3" />
+                </Button>
+                <Button variant="ghost" size="sm" title="Full reindex (re-categorize everything)" disabled={scanMut.isPending} onClick={() => fullReindex(s)}>
+                  <ListRestart className="h-3 w-3" />
                 </Button>
                 <Button variant="ghost" size="sm" title="Remove folder" onClick={() => rmSource.mutate(s.id)}>
                   <X className="h-3 w-3" />

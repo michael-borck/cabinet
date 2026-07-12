@@ -129,21 +129,29 @@ async def assign_categories(
                 detail=f"Category {cat_id} not found",
             )
 
-    # Build existing category id set to avoid duplicates.
-    existing_cat_ids = {fc.category_id for fc in file.categories}
+    existing = {fc.category_id: fc for fc in file.categories}
 
     for cat_id in body.category_ids:
-        if cat_id not in existing_cat_ids:
-            fc = FileCategory(
-                file_id=file_id,
-                category_id=cat_id,
-                is_manual=True,
+        fc = existing.get(cat_id)
+        if fc is not None:
+            # Re-asserting an AI assignment pins it: only is_manual rows
+            # survive recategorization, so a plain skip would let the next
+            # run silently drop a category the user explicitly confirmed.
+            fc.is_manual = True
+        else:
+            session.add(
+                FileCategory(
+                    file_id=file_id,
+                    category_id=cat_id,
+                    is_manual=True,
+                )
             )
-            session.add(fc)
 
     await session.flush()
 
-    # Re-fetch file with updated categories.
+    # The assignments were inserted as raw FK rows, so the already-loaded
+    # relationship collection is stale; expire it so the re-fetch reloads it.
+    session.expire(file, ["categories"])
     file = await FileRepository.get_by_id(session, file_id)
     return _build_file_response(file)
 

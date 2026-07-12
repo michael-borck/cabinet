@@ -1,14 +1,95 @@
-import { ExternalLink, FolderOpen, X } from 'lucide-react'
+import { useState } from 'react'
+import { Command } from 'cmdk'
+import { ExternalLink, FolderOpen, Plus, X } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { useFile, useRemoveFileCategory } from '@/hooks/useFiles'
+import { useCategories } from '@/hooks/useCategories'
+import { useAssignCategories, useFile, useRemoveFileCategory } from '@/hooks/useFiles'
 import { useSelectionStore } from '@/stores/selectionStore'
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+interface FlatCategory {
+  id: number
+  name: string
+  parent_id: number | null
+}
+
+/** "Finance › Invoices" — disambiguates same-named categories under different parents. */
+function categoryPath(cat: FlatCategory, byId: Map<number, FlatCategory>): string {
+  const parts = [cat.name]
+  let parentId = cat.parent_id
+  while (parentId !== null) {
+    const parent = byId.get(parentId)
+    if (!parent) break
+    parts.unshift(parent.name)
+    parentId = parent.parent_id
+  }
+  return parts.join(' › ')
+}
+
+function AddCategoryPicker({ fileId, assignedIds }: { fileId: number; assignedIds: Set<number> }) {
+  const [open, setOpen] = useState(false)
+  const { data: categories } = useCategories('flat')
+  const assign = useAssignCategories()
+
+  if (!open) {
+    return (
+      <Button variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={() => setOpen(true)}>
+        <Plus className="mr-1 h-3 w-3" /> Add
+      </Button>
+    )
+  }
+
+  const flat = (categories ?? []) as FlatCategory[]
+  const byId = new Map(flat.map((c) => [c.id, c]))
+  const available = flat.filter((c) => !assignedIds.has(c.id))
+
+  return (
+    <Command
+      className="w-full rounded-md border"
+      onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false) }}
+    >
+      <Command.Input
+        autoFocus
+        placeholder="Add category…"
+        onBlur={() => setOpen(false)}
+        className="h-7 w-full border-b bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground"
+      />
+      <Command.List className="max-h-40 overflow-auto p-1">
+        <Command.Empty className="px-2 py-2 text-xs text-muted-foreground">
+          No matching category.
+        </Command.Empty>
+        {available.map((cat) => {
+          const path = categoryPath(cat, byId)
+          return (
+            <Command.Item
+              key={cat.id}
+              value={path}
+              // onMouseDown fires before the input's blur closes the picker.
+              onMouseDown={(e) => e.preventDefault()}
+              onSelect={() => {
+                setOpen(false)
+                assign.mutate(
+                  { fileId, categoryIds: [cat.id] },
+                  { onError: () => toast.error('Failed to add category') }
+                )
+              }}
+              className="cursor-pointer rounded px-2 py-1.5 text-xs data-[selected=true]:bg-accent"
+            >
+              {path}
+            </Command.Item>
+          )
+        })}
+      </Command.List>
+    </Command>
+  )
 }
 
 export function FileDetailsPanel() {
@@ -84,6 +165,12 @@ export function FileDetailsPanel() {
               {(!file.categories || file.categories.length === 0) && (
                 <span className="text-xs text-muted-foreground">No categories</span>
               )}
+            </div>
+            <div className="mt-2">
+              <AddCategoryPicker
+                fileId={file.id}
+                assignedIds={new Set((file.categories ?? []).map((c: { id: number }) => c.id))}
+              />
             </div>
           </div>
 
