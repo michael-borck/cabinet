@@ -21,6 +21,7 @@ declare global {
       }
     }
     api: {
+      getApiToken: () => Promise<string>
       selectFolder: () => Promise<string | null>
       revealInFinder: (path: string) => Promise<void>
       openFile: (path: string) => Promise<void>

@@ -29,6 +29,7 @@ Cabinet is a desktop app that uses AI to categorize files into virtual folders. 
 - Files are processed in **batches of 10** (configurable via `categorization_batch_size`)
 - Search is **client-side** -- filters on filename and category name using already-loaded data
 - The database is SQLite with async access via aiosqlite
+- The scanner always skips hidden entries and a built-in set of development/junk names (`DEFAULT_EXCLUDED_DIRS` / `DEFAULT_EXCLUDED_FILES` in `services/scanner.py`); each source can add glob `exclude_patterns` (matched against bare names and source-relative paths), editable via `PATCH /sources/{id}` and the Sources tab
 
 ## Commands
 
@@ -56,6 +57,7 @@ All prefixed with `CABINET_`:
 - `CABINET_DB_PATH` -- SQLite database file path (default: `backend/data/cabinet.db`)
 - `CABINET_EXTRACTION_MAX_CHARS` -- Max chars to extract per file (default: 50000)
 - `CABINET_CATEGORIZATION_BATCH_SIZE` -- Files per LLM call (default: 10)
+- `CABINET_API_TOKEN` -- When set, every API request (except `/health`) must send it in the `X-API-Token` header. Electron generates a fresh token per launch and injects it into both processes; unset (e.g. standalone uvicorn, tests) the API is open.
 
 ## Conventions
 

@@ -29,6 +29,13 @@ export const useUIStore = create<UIState>()(
       setSidebarWidth: (w) => set({ sidebarWidth: w }),
       setDetailsPanelWidth: (w) => set({ detailsPanelWidth: w }),
     }),
-    { name: 'file-sorter-ui' }
+    {
+      name: 'file-sorter-ui',
+      onRehydrateStorage: () => (state) => {
+        // Apply the persisted theme to the document on startup so the UI
+        // doesn't boot light when dark mode was saved.
+        document.documentElement.classList.toggle('dark', state?.theme === 'dark')
+      },
+    }
   )
 )

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
 const api = {
+  getApiToken: (): Promise<string> => ipcRenderer.invoke('get-api-token'),
   selectFolder: (): Promise<string | null> => ipcRenderer.invoke('select-folder'),
   revealInFinder: (path: string): Promise<void> => ipcRenderer.invoke('reveal-in-finder', path),
   openFile: (path: string): Promise<void> => ipcRenderer.invoke('open-file', path),

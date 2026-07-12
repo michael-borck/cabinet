@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
-import { useFiles } from '@/hooks/useFiles'
-import { useCategories } from '@/hooks/useCategories'
+import { useAllFiles } from '@/hooks/useFiles'
 
 interface FileResult {
   id: number
@@ -10,26 +9,19 @@ interface FileResult {
 }
 
 export function useSearch(query: string) {
-  const { data: filesData } = useFiles({ per_page: 200 })
-  const { data: categories } = useCategories('flat')
+  // Loads every page of the files list, so search matches the full set.
+  const { files } = useAllFiles()
 
   const results = useMemo(() => {
     const q = query.toLowerCase().trim()
-    if (!q || !filesData?.files) return []
+    if (!q || files.length === 0) return []
 
-    const categoryNames = new Map<number, string>()
-    if (Array.isArray(categories)) {
-      for (const cat of categories) {
-        categoryNames.set(cat.id, cat.name.toLowerCase())
-      }
-    }
-
-    return filesData.files.filter((file: FileResult) => {
+    return (files as unknown as FileResult[]).filter((file) => {
       if (file.filename.toLowerCase().includes(q)) return true
       if (file.categories?.some((c) => c.name.toLowerCase().includes(q))) return true
       return false
     })
-  }, [query, filesData, categories])
+  }, [query, files])
 
   return { results }
 }

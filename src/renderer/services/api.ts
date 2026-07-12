@@ -5,10 +5,28 @@ const api = axios.create({
   timeout: 30000,
 })
 
+// The backend requires the per-launch token from the Electron main process.
+// Fetched once, awaited by every request; null when running outside Electron
+// (e.g. plain vite dev against a token-less backend).
+let apiTokenPromise: Promise<string | null> | null = null
+
+api.interceptors.request.use(async (config) => {
+  if (!apiTokenPromise) {
+    apiTokenPromise = window.api?.getApiToken
+      ? window.api.getApiToken().catch(() => null)
+      : Promise.resolve(null)
+  }
+  const token = await apiTokenPromise
+  if (token) config.headers['X-API-Token'] = token
+  return config
+})
+
 // Sources
 export const getSources = () => api.get('/sources').then(r => r.data)
-export const createSource = (data: { path: string; label?: string; recursive?: boolean }) =>
+export const createSource = (data: { path: string; label?: string; recursive?: boolean; exclude_patterns?: string[] }) =>
   api.post('/sources', data).then(r => r.data)
+export const updateSource = (id: number, data: { label?: string; recursive?: boolean; exclude_patterns?: string[] }) =>
+  api.patch(`/sources/${id}`, data).then(r => r.data)
 export const deleteSource = (id: number) => api.delete(`/sources/${id}`)
 export const scanSource = (id: number, mode: string = 'quick_sync') =>
   api.post(`/sources/${id}/scan`, { mode }).then(r => r.data)

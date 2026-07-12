@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { FileIcon, MoreHorizontal } from 'lucide-react'
-import { useFiles } from '@/hooks/useFiles'
+import { useAllFiles } from '@/hooks/useFiles'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { cn } from '@/lib/utils'
 
@@ -25,10 +25,10 @@ interface FileItem {
 export function FileTable() {
   const { selectedCategoryId } = useSelectionStore()
   const { selectedFileId, setSelectedFile } = useSelectionStore()
-  const params: Record<string, unknown> = { per_page: 200 }
+  const params: Record<string, unknown> = {}
   if (selectedCategoryId) params.category_id = selectedCategoryId
-  const { data, isLoading } = useFiles(params)
-  const files: FileItem[] = data?.files ?? []
+  const { files: loadedFiles, total, isLoading, hasNextPage } = useAllFiles(params)
+  const files = loadedFiles as unknown as FileItem[]
 
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
@@ -105,7 +105,7 @@ export function FileTable() {
       </div>
       {/* Footer */}
       <div className="border-t bg-muted/50 px-4 py-1.5 text-xs text-muted-foreground">
-        {data?.total ?? 0} files
+        {hasNextPage ? `Loading… ${files.length} of ${total} files` : `${total} files`}
       </div>
     </div>
   )

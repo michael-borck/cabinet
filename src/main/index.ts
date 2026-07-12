@@ -1,8 +1,9 @@
 import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron'
-import { join } from 'path'
+import { existsSync, statSync } from 'fs'
+import { isAbsolute, join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
-import { startBackend, stopBackend } from './backend'
+import { getApiToken, startBackend, stopBackend } from './backend'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -30,6 +31,24 @@ function setupAutoUpdater(): void {
   autoUpdater.on('error', (error) => {
     mainWindow?.webContents.send('updater:error', error.message)
   })
+}
+
+function isAllowedNavigation(url: string): boolean {
+  try {
+    const target = new URL(url)
+    const devServerUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
+    if (devServerUrl) {
+      return target.origin === new URL(devServerUrl).origin
+    }
+    return target.protocol === 'file:'
+  } catch {
+    return false
+  }
+}
+
+// Validate renderer-supplied paths before handing them to the shell.
+function isValidExistingPath(filePath: unknown): filePath is string {
+  return typeof filePath === 'string' && isAbsolute(filePath) && existsSync(filePath)
 }
 
 function createWindow(): void {
@@ -62,6 +81,14 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Block navigation away from the app's own origin (dev server in dev,
+  // local file in prod) -- the renderer has a privileged preload.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedNavigation(url)) {
+      event.preventDefault()
+    }
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -84,12 +111,27 @@ app.whenReady().then(async () => {
   })
 })
 
+// On macOS the app stays alive with no windows, so keep the backend running
+// too -- the 'activate' handler recreates the window and it reconnects.
+// On other platforms closing all windows quits the app, which stops the
+// backend via the 'will-quit' hook below.
 app.on('window-all-closed', () => {
-  stopBackend()
   if (process.platform !== 'darwin') app.quit()
 })
 
+// Stop the backend when the app actually quits (all platforms). Defer the
+// quit until the backend has exited (SIGTERM, escalating to SIGKILL after 5s).
+let backendStoppedForQuit = false
+app.on('will-quit', (event) => {
+  if (backendStoppedForQuit) return
+  backendStoppedForQuit = true
+  event.preventDefault()
+  stopBackend().finally(() => app.exit(0))
+})
+
 // IPC handlers
+ipcMain.handle('get-api-token', () => getApiToken())
+
 ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory']
@@ -98,10 +140,23 @@ ipcMain.handle('select-folder', async () => {
 })
 
 ipcMain.handle('reveal-in-finder', async (_event, filePath: string) => {
+  if (!isValidExistingPath(filePath)) {
+    console.warn('[ipc] reveal-in-finder rejected invalid path:', filePath)
+    return
+  }
   shell.showItemInFolder(filePath)
 })
 
 ipcMain.handle('open-file', async (_event, filePath: string) => {
+  if (!isValidExistingPath(filePath)) {
+    console.warn('[ipc] open-file rejected invalid path:', filePath)
+    return
+  }
+  const stats = statSync(filePath, { throwIfNoEntry: false })
+  if (!stats?.isFile()) {
+    console.warn('[ipc] open-file rejected non-file path:', filePath)
+    return
+  }
   shell.openPath(filePath)
 })
 

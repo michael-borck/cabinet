@@ -1,8 +1,10 @@
 import { ChevronRight, ChevronDown, FolderOpen, Folder, Plus } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
-import { useCategories } from '@/hooks/useCategories'
+import { Input } from '@/components/ui/input'
+import { useCategories, useCreateCategory } from '@/hooks/useCategories'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { cn } from '@/lib/utils'
 
@@ -65,15 +67,55 @@ function TreeNode({ node, depth = 0 }: { node: CategoryNode; depth?: number }) {
 export function CategoryTree() {
   const { data: categories, isLoading } = useCategories('tree')
   const { selectedCategoryId, setSelectedCategory } = useSelectionStore()
+  const [adding, setAdding] = useState(false)
+  const [newName, setNewName] = useState('')
+  const createCat = useCreateCategory()
+
+  const cancelAdd = () => {
+    setAdding(false)
+    setNewName('')
+  }
+
+  const submitAdd = () => {
+    const name = newName.trim()
+    if (!name) {
+      cancelAdd()
+      return
+    }
+    createCat.mutate(
+      { name },
+      {
+        onSuccess: () => cancelAdd(),
+        onError: () => toast.error('Failed to create category'),
+      }
+    )
+  }
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-2">
         <span className="text-sm font-semibold">Categories</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setAdding(true)}>
           <Plus className="h-4 w-4" />
         </Button>
       </div>
+      {adding && (
+        <div className="border-b px-3 py-2">
+          <Input
+            autoFocus
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitAdd()
+              if (e.key === 'Escape') cancelAdd()
+            }}
+            onBlur={cancelAdd}
+            placeholder="New category name…"
+            className="h-7 text-sm"
+            disabled={createCat.isPending}
+          />
+        </div>
+      )}
       <ScrollArea className="flex-1">
         <div className="p-2">
           <button
