@@ -10,3 +10,9 @@ backend/.pytest_cache/
 backend/.ruff_cache/
 .DS_Store
 *.db
+
+# Build artifacts
+backend-dist/
+backend/build/
+backend/*.spec
+release/
