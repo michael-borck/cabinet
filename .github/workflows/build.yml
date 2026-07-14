@@ -187,8 +187,8 @@ jobs:
         # Signing secrets are not available (and must not be exposed) on pull_request builds
         if: matrix.os == 'macos-latest' && github.event_name != 'pull_request'
         env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_CERTIFICATE: ${{ secrets.CSC_LINK }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
           echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
           security create-keychain -p actions build.keychain
@@ -203,9 +203,9 @@ jobs:
         run: npx electron-builder --${{ matrix.platform }} --publish never
         env:
           # electron-builder/@electron/notarize read APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD
-          # and APPLE_TEAM_ID (the repo secret is named APPLE_ID_PASSWORD)
+          # and APPLE_TEAM_ID (repo secrets use the same names)
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Package Electron app (unsigned, pull request)
