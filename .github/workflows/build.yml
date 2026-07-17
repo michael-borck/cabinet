@@ -216,6 +216,8 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Upload artifacts
+        # Only tag builds feed the release job; PR/main builds just verify packaging.
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}
@@ -227,6 +229,7 @@ jobs:
             release/*.yml
             release/*.blockmap
           if-no-files-found: ignore
+          retention-days: 5
 
   release:
     needs: build
