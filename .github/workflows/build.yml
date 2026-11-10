@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-latest
+          - os: macos-15
             platform: mac
             backend_ext: ""
           - os: ubuntu-latest
@@ -185,10 +185,10 @@ jobs:
 
       - name: Import macOS signing certificate
         # Signing secrets are not available (and must not be exposed) on pull_request builds
-        if: matrix.os == 'macos-latest' && github.event_name != 'pull_request'
+        if: matrix.os == 'macos-15' && github.event_name != 'pull_request'
         env:
-          MACOS_CERTIFICATE: ${{ secrets.CSC_LINK }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.CSC_KEY_PASSWORD }}
+          MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
         run: |
           echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
           security create-keychain -p actions build.keychain
@@ -200,13 +200,23 @@ jobs:
 
       - name: Package Electron app (signed)
         if: github.event_name != 'pull_request'
-        run: npx electron-builder --${{ matrix.platform }} --publish never
         env:
-          # electron-builder/@electron/notarize read APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD
-          # and APPLE_TEAM_ID (repo secrets use the same names)
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MATRIX_PLATFORM: ${{ matrix.platform }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          if [ "$MATRIX_PLATFORM" = "mac" ] && [ -n "$APPLE_API_KEY_CONTENT" ] && [ -n "$APPLE_API_KEY_ID" ]; then
+            KEY_PATH="$RUNNER_TEMP/apple-api/AuthKey_${APPLE_API_KEY_ID}.p8"
+            mkdir -p "$RUNNER_TEMP/apple-api"
+            printf '%s' "$APPLE_API_KEY_CONTENT" | openssl base64 -d -A > "$KEY_PATH"
+            chmod 600 "$KEY_PATH"
+            export APPLE_API_KEY="$KEY_PATH"
+            export APPLE_API_KEY_ID="$APPLE_API_KEY_ID"
+            export APPLE_API_ISSUER="$APPLE_API_ISSUER"
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
+          fi
+          npx electron-builder --${{ matrix.platform }} --publish never
 
       - name: Package Electron app (unsigned, pull request)
         if: github.event_name == 'pull_request'
