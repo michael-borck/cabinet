@@ -200,6 +200,7 @@ jobs:
 
       - name: Package Electron app (signed)
         if: github.event_name != 'pull_request'
+        shell: bash
         env:
           MATRIX_PLATFORM: ${{ matrix.platform }}
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
