@@ -11,6 +11,7 @@ import logging
 import os
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -874,6 +875,17 @@ class FileRepository:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class MergeResult:
+    """Outcome of a concept merge (Phase 3c)."""
+
+    source: Category
+    target: Category
+    assignments_moved: int = 0
+    aliases_added: int = 0
+    conflicts: list[str] = field(default_factory=list)
+
+
 class CategoryRepository:
     """CRUD and tree-query operations for :class:`Category` rows."""
 
@@ -890,6 +902,7 @@ class CategoryRepository:
                 selectinload(Category.aliases),
                 selectinload(Category.examples),
             )
+            .where(Category.status != "merged")
             .order_by(Category.name)
         )
         all_cats: Sequence[Category] = result.scalars().all()
@@ -940,6 +953,7 @@ class CategoryRepository:
                     selectinload(Category.aliases),
                     selectinload(Category.examples),
                 )
+                .where(Category.status != "merged")
                 .order_by(Category.name)
             )
         ).scalars().all()
@@ -1132,10 +1146,14 @@ class CategoryRepository:
                 f"Alias {alias!r} already refers to another category"
             )
 
-        # Canonical names reserve their normalized form too.
+        # Canonical names reserve their normalized form too, except merged
+        # concepts: their name is history and is exactly what a merge turns
+        # into an alias.
         categories = (await session.execute(select(Category))).scalars().all()
         for other in categories:
-            if other.id != category_id and normalize_concept(other.name) == normalized:
+            if other.id == category_id or other.status == "merged":
+                continue
+            if normalize_concept(other.name) == normalized:
                 raise ValueError(
                     f"Alias {alias!r} conflicts with category {other.name!r}"
                 )
@@ -1215,6 +1233,168 @@ class CategoryRepository:
         return category
 
     @staticmethod
+    async def _follow_merged(session: AsyncSession, category: Category) -> Category:
+        seen: set[int] = set()
+        current = category
+        while (
+            current.status == "merged"
+            and current.merged_into_id is not None
+            and current.id not in seen
+        ):
+            seen.add(current.id)
+            target = await session.get(Category, current.merged_into_id)
+            if target is None:
+                break
+            current = target
+        return current
+
+    @staticmethod
+    async def merge(
+        session: AsyncSession, source_id: int, target_id: int
+    ) -> MergeResult | None:
+        """Merge *source* into *target* as pure DB updates (design §7).
+
+        Adds the source name/aliases to the target, repoints document and
+        instance assignments (deduping by manual-beats-AI and confidence),
+        moves examples, and keeps the source row as ``status=merged``.
+        Nothing is re-extracted or re-categorised.
+        """
+        source = await CategoryRepository.get_with_relations(session, source_id)
+        target = await session.get(Category, target_id)
+        if source is None or target is None:
+            return None
+        target = await CategoryRepository._follow_merged(session, target)
+        if source.id == target.id:
+            raise ValueError("Cannot merge a category into itself")
+        if source.status == "merged":
+            raise ValueError("Category is already merged")
+
+        # Mark the source first: its canonical name is now history, so the
+        # alias-uniqueness check must not treat it as a live conflict.
+        source.status = "merged"
+        source.merged_into_id = target.id
+        await session.flush()
+
+        conflicts: list[str] = []
+        aliases_added = 0
+
+        source_name = normalize_concept(source.name)
+        if source_name and source_name != normalize_concept(target.name):
+            try:
+                alias = await CategoryRepository.add_alias(
+                    session, target.id, source.name, source="merge"
+                )
+                if alias is not None:
+                    aliases_added += 1
+            except ValueError as exc:
+                conflicts.append(str(exc))
+
+        for alias in list(source.aliases):
+            if alias.normalized == normalize_concept(target.name):
+                continue
+            alias.category_id = target.id
+            alias.source = "merge"
+            aliases_added += 1
+        await session.flush()
+
+        assignments_moved = 0
+        source_docs = (
+            await session.execute(
+                select(DocumentCategory).where(
+                    DocumentCategory.category_id == source.id
+                )
+            )
+        ).scalars().all()
+        for dc in source_docs:
+            existing = (
+                await session.execute(
+                    select(DocumentCategory).where(
+                        DocumentCategory.document_id == dc.document_id,
+                        DocumentCategory.category_id == target.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                existing.is_manual = existing.is_manual or dc.is_manual
+                confidences = [
+                    c for c in (existing.confidence, dc.confidence) if c is not None
+                ]
+                existing.confidence = max(confidences) if confidences else None
+                await session.delete(dc)
+            else:
+                dc.category_id = target.id
+            assignments_moved += 1
+
+        source_instances = (
+            await session.execute(
+                select(FileCategory).where(FileCategory.category_id == source.id)
+            )
+        ).scalars().all()
+        for fc in source_instances:
+            existing = (
+                await session.execute(
+                    select(FileCategory).where(
+                        FileCategory.file_id == fc.file_id,
+                        FileCategory.category_id == target.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                existing.is_manual = existing.is_manual or fc.is_manual
+                confidences = [
+                    c for c in (existing.confidence, fc.confidence) if c is not None
+                ]
+                existing.confidence = max(confidences) if confidences else None
+                await session.delete(fc)
+            else:
+                fc.category_id = target.id
+            assignments_moved += 1
+
+        source_examples = (
+            await session.execute(
+                select(CategoryExample).where(
+                    CategoryExample.category_id == source.id
+                )
+            )
+        ).scalars().all()
+        for example in source_examples:
+            example.category_id = target.id
+
+        # Move sub-concepts under the target when their slug is free there;
+        # otherwise leave them (they surface as roots, not lost).
+        target_child_slugs = {
+            child.slug
+            for child in (
+                await session.execute(
+                    select(Category).where(Category.parent_id == target.id)
+                )
+            ).scalars().all()
+        }
+        source_children = (
+            await session.execute(
+                select(Category).where(Category.parent_id == source.id)
+            )
+        ).scalars().all()
+        for child in source_children:
+            if child.slug in target_child_slugs:
+                conflicts.append(
+                    f"Child {child.name!r} conflicts under the target; "
+                    "left under the merged parent"
+                )
+                continue
+            child.parent_id = target.id
+            target_child_slugs.add(child.slug)
+
+        await session.flush()
+        return MergeResult(
+            source=source,
+            target=target,
+            assignments_moved=assignments_moved,
+            aliases_added=aliases_added,
+            conflicts=conflicts,
+        )
+
+    @staticmethod
     async def create(
         session: AsyncSession,
         *,
@@ -1261,9 +1441,46 @@ class CategoryRepository:
                 session, category_id, new_parent_id
             )
 
+        # Renaming a concept must keep the slug in sync and unique under the
+        # (possibly new) parent.
+        new_name = kwargs.get("name")
+        name_changed = (
+            isinstance(new_name, str)
+            and bool(new_name.strip())
+            and new_name != category.name
+        )
+        if name_changed and "slug" not in kwargs:
+            candidate_slug = _slugify(new_name)
+            effective_parent = kwargs.get("parent_id", category.parent_id)
+            query = select(Category).where(
+                Category.slug == candidate_slug,
+                Category.id != category_id,
+            )
+            if effective_parent is None:
+                query = query.where(Category.parent_id.is_(None))
+            else:
+                query = query.where(Category.parent_id == effective_parent)
+            conflict = (
+                await session.execute(query.limit(1))
+            ).scalar_one_or_none()
+            if conflict is not None:
+                raise ValueError(
+                    f"Category slug {candidate_slug!r} already exists under "
+                    "the same parent"
+                )
+            kwargs["slug"] = candidate_slug
+
         for key, value in kwargs.items():
             if hasattr(category, key):
                 setattr(category, key, value)
+
+        # A renamed/redefined concept's vector and any alias-based identity
+        # need rebuilding on the next resolution pass.
+        if name_changed or "definition" in kwargs:
+            category.embedding = None
+            category.embedding_model = None
+            category.embedding_dim = None
+
         await session.flush()
         return category
 

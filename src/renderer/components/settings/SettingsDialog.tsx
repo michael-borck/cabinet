@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory } from '@/services/api'
+import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { toast } from 'sonner'
@@ -426,8 +426,32 @@ interface ReviewItem {
   }[]
 }
 
+interface MergeProposal {
+  source_id: number
+  source_name: string
+  target_id: number
+  target_name: string
+  similarity: number | null
+  reason: string | null
+  origin: string
+}
+
+interface RenameProposal {
+  category_id: number
+  current_name: string
+  proposed_name: string
+  reason: string | null
+  origin: string
+}
+
+interface ConsolidationResult {
+  merges: MergeProposal[]
+  renames: RenameProposal[]
+}
+
 function ReviewTab() {
   const qc = useQueryClient()
+  const [proposals, setProposals] = useState<ConsolidationResult | null>(null)
   const { data, isPending, isError } = useQuery({
     queryKey: queryKeys.categoryReview,
     queryFn: getCategoryReview,
@@ -448,6 +472,31 @@ function ReviewTab() {
     onSuccess: () => { invalidate(); toast.success('Concept rejected') },
     onError: (err) => { toast.error(`Failed to reject: ${errorDetail(err)}`) },
   })
+  const merge = useMutation({
+    mutationFn: ({ source, target }: { source: number; target: number }) =>
+      mergeCategory(source, target),
+    onSuccess: () => {
+      invalidate()
+      setProposals(null)
+      toast.success('Concepts merged')
+    },
+    onError: (err) => { toast.error(`Failed to merge: ${errorDetail(err)}`) },
+  })
+  const rename = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      updateCategory(id, { name }),
+    onSuccess: () => {
+      invalidate()
+      setProposals(null)
+      toast.success('Concept renamed')
+    },
+    onError: (err) => { toast.error(`Failed to rename: ${errorDetail(err)}`) },
+  })
+  const consolidate = useMutation({
+    mutationFn: consolidateCategories,
+    onSuccess: (result) => setProposals(result as ConsolidationResult),
+    onError: (err) => { toast.error(`Consolidation failed: ${errorDetail(err)}`) },
+  })
 
   if (isPending) {
     return <p className="text-sm text-muted-foreground">Loading review queue…</p>
@@ -457,24 +506,21 @@ function ReviewTab() {
   }
 
   const items = (data ?? []) as ReviewItem[]
-  if (items.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No concepts are awaiting review. New AI names appear here until they cover
-        enough documents or you approve them.
-      </p>
-    )
-  }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div>
         <h3 className="text-sm font-medium">Provisional concepts</h3>
         <p className="text-xs text-muted-foreground">
           Approve a concept to keep it, or reject it to remove the concept and its
-          assignments. Possible duplicates are suggestions, not merged automatically.
+          assignments. A merge is an explicit action; nothing consolidates on its own.
         </p>
       </div>
+      {items.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No concepts are awaiting review.
+        </p>
+      )}
       {items.map((item) => (
         <div key={item.id} className="rounded-md border p-3 text-sm">
           <div className="flex items-start justify-between gap-2">
@@ -505,17 +551,107 @@ function ReviewTab() {
             </ul>
           )}
           {item.possible_duplicates.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
+            <div className="mt-2 space-y-1 text-xs">
               <span className="text-muted-foreground">Possible duplicates:</span>
               {item.possible_duplicates.map((dup) => (
-                <Badge key={dup.category_id} variant="secondary">
-                  {dup.path} ({Math.round(dup.similarity * 100)}%)
-                </Badge>
+                <div key={dup.category_id} className="flex items-center justify-between gap-2">
+                  <Badge variant="secondary">
+                    {dup.path} ({Math.round(dup.similarity * 100)}%)
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={merge.isPending}
+                    onClick={() => {
+                      if (window.confirm(`Merge "${item.path}" into "${dup.path}"? This cannot be undone automatically.`)) {
+                        merge.mutate({ source: item.id, target: dup.category_id })
+                      }
+                    }}
+                  >
+                    Merge
+                  </Button>
+                </div>
               ))}
             </div>
           )}
         </div>
       ))}
+
+      <div className="space-y-2 border-t pt-4">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-medium">Consolidation suggestions</h3>
+            <p className="text-xs text-muted-foreground">
+              Deterministic duplicate detection plus an optional LLM review. Nothing is
+              applied until you choose Apply.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={consolidate.isPending}
+            onClick={() => consolidate.mutate()}
+          >
+            {consolidate.isPending ? 'Analyzing…' : 'Analyze taxonomy'}
+          </Button>
+        </div>
+        {proposals &&
+          proposals.merges.length === 0 &&
+          proposals.renames.length === 0 && (
+            <p className="text-xs text-muted-foreground">No suggestions.</p>
+          )}
+        {proposals?.merges.map((proposal) => (
+          <div
+            key={`merge-${proposal.source_id}-${proposal.target_id}`}
+            className="flex items-center justify-between gap-2 rounded border p-2 text-xs"
+          >
+            <span className="min-w-0">
+              Merge <strong>{proposal.source_name}</strong> →{' '}
+              <strong>{proposal.target_name}</strong>
+              {proposal.similarity != null
+                ? ` (${Math.round(proposal.similarity * 100)}%)`
+                : ''}
+              {proposal.reason ? ` — ${proposal.reason}` : ''}
+            </span>
+            <Button
+              size="sm"
+              disabled={merge.isPending}
+              onClick={() =>
+                merge.mutate({
+                  source: proposal.source_id,
+                  target: proposal.target_id,
+                })
+              }
+            >
+              Apply
+            </Button>
+          </div>
+        ))}
+        {proposals?.renames.map((proposal) => (
+          <div
+            key={`rename-${proposal.category_id}`}
+            className="flex items-center justify-between gap-2 rounded border p-2 text-xs"
+          >
+            <span className="min-w-0">
+              Rename <strong>{proposal.current_name}</strong> →{' '}
+              <strong>{proposal.proposed_name}</strong>
+              {proposal.reason ? ` — ${proposal.reason}` : ''}
+            </span>
+            <Button
+              size="sm"
+              disabled={rename.isPending}
+              onClick={() =>
+                rename.mutate({
+                  id: proposal.category_id,
+                  name: proposal.proposed_name,
+                })
+              }
+            >
+              Apply
+            </Button>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

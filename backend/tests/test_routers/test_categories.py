@@ -195,3 +195,55 @@ async def test_category_review_approve_and_reject(client: AsyncClient, session, 
     assert reject.status_code == 204
     after = await client.get("/api/v1/categories/review")
     assert all(entry["id"] != temporary.id for entry in after.json())
+
+
+async def test_merge_endpoint(client: AsyncClient, session):
+    from cabinet.db.repositories import CategoryRepository
+
+    source = await CategoryRepository.create(session, name="Billing")
+    target = await CategoryRepository.create(session, name="Invoices")
+    await session.commit()
+
+    response = await client.post(
+        f"/api/v1/categories/{source.id}/merge",
+        json={"target_id": target.id},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_id"] == source.id
+    assert body["target_id"] == target.id
+
+    await session.refresh(source)
+    assert source.status == "merged"
+    assert source.merged_into_id == target.id
+
+
+async def test_consolidate_endpoint_deterministic(client: AsyncClient, session):
+    from cabinet.db.repositories import CategoryRepository
+    from cabinet.utils.embeddings import pack_embedding
+
+    invoice = await CategoryRepository.create(session, name="Invoice")
+    bills = await CategoryRepository.create(session, name="Bills")
+    await CategoryRepository.set_embedding(
+        session,
+        invoice.id,
+        embedding=pack_embedding([1.0, 0.0]),
+        model="m",
+        dim=2,
+    )
+    await CategoryRepository.set_embedding(
+        session,
+        bills.id,
+        embedding=pack_embedding([0.99, 0.05]),
+        model="m",
+        dim=2,
+    )
+    await session.commit()
+
+    response = await client.post("/api/v1/categories/consolidate")
+    assert response.status_code == 200
+    merges = response.json()["merges"]
+    assert any(
+        {merge["source_id"], merge["target_id"]} == {invoice.id, bills.id}
+        for merge in merges
+    )

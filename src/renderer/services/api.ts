@@ -55,6 +55,10 @@ export const approveCategory = (id: number, data?: { definition?: string }) =>
   api.post(`/categories/${id}/approve`, data ?? {}).then(r => r.data)
 export const rejectCategory = (id: number) =>
   api.post(`/categories/${id}/reject`).then(r => r.data)
+export const mergeCategory = (sourceId: number, targetId: number) =>
+  api.post(`/categories/${sourceId}/merge`, { target_id: targetId }).then(r => r.data)
+export const consolidateCategories = () =>
+  api.post('/categories/consolidate').then(r => r.data)
 
 // Jobs
 export const getJobs = () => api.get('/jobs').then(r => r.data)

@@ -9,25 +9,31 @@ from cabinet.db.engine import get_session
 from cabinet.db.repositories import (
     CategoryRepository,
     FileRepository,
+    LLMConfigRepository,
     SourceRepository,
     effective_categories,
 )
+from cabinet.llm.factory import create_provider
 from cabinet.schemas import (
     CategoryAliasCreate,
     CategoryAliasResponse,
     CategoryApprove,
     CategoryBrief,
     CategoryCreate,
+    CategoryMergeRequest,
+    CategoryMergeResponse,
     CategoryResponse,
     CategoryReviewDuplicate,
     CategoryReviewItem,
     CategoryReviewSample,
     CategoryTreeNode,
     CategoryUpdate,
+    ConsolidationResponse,
     FileListResponse,
     FileResponse,
 )
 from cabinet.services.concepts import TaxonomyReviewService
+from cabinet.services.consolidation import ConsolidationService
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
@@ -160,6 +166,52 @@ async def reject_category(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Provisional category {category_id} not found",
         )
+
+
+@router.post("/{source_id}/merge", response_model=CategoryMergeResponse)
+async def merge_category(
+    source_id: int,
+    body: CategoryMergeRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Merge a concept into another (Phase 3c): pure DB updates."""
+    try:
+        result = await CategoryRepository.merge(
+            session, source_id, body.target_id
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source or target category not found",
+        )
+    return CategoryMergeResponse(
+        source_id=result.source.id,
+        target_id=result.target.id,
+        assignments_moved=result.assignments_moved,
+        aliases_added=result.aliases_added,
+        conflicts=result.conflicts,
+    )
+
+
+@router.post("/consolidate", response_model=ConsolidationResponse)
+async def consolidate_categories(session: AsyncSession = Depends(get_session)):
+    """Propose concept merges/renames; nothing is applied automatically."""
+    config = await LLMConfigRepository.get_active(session, kind="chat")
+    provider = (
+        create_provider(
+            provider=config.provider,
+            model=config.model,
+            api_key=config.api_key,
+            base_url=config.base_url,
+        )
+        if config is not None
+        else None
+    )
+    return await ConsolidationService(session, provider).proposals()
 
 
 @router.post("", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)

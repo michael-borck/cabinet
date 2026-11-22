@@ -1,8 +1,9 @@
 # Design: Phase 3 — Taxonomy governance
 
-- **Status:** 3a–3b implemented (schema, aliases, provisional concepts,
-  resolution order, concept-embedding backfill; candidate-ID assignment,
-  learning examples, auto-promotion, review inbox). 3c–3d pending.
+- **Status:** 3a–3c implemented (schema/aliases/provisional concepts,
+  resolution order, candidate-ID assignment, learning examples,
+  auto-promotion, review inbox, consolidation proposals and approved
+  merge). 3d (two-pass proposal + drift insights) remains optional.
 - **Date:** 2026-11-23
 - **Scope:** Govern the *vocabulary* of the category tree: stable concepts,
   aliases, provisional concepts, a human review inbox, consolidation, and a
@@ -242,6 +243,21 @@ Applying a merge is pure DB work:
 3. Set the loser `status = merged`, `merged_into_id = winner.id` (keep the
    row for history and old links).
 4. No document is re-extracted, re-factored, or re-embedded.
+
+**Implemented (3c).** `POST /categories/consolidate` returns deterministic
+merges (concept embedding cosine ≥ 0.9 or normalized-name match, ranked,
+direction = fewer documents folds into more) plus optional LLM merge/rename
+proposals from a compact outline; nothing is applied. `POST
+/categories/{source}/merge` performs the pure-DB merge above, including
+dedupe (manual beats AI, highest confidence), moving aliases/examples and
+re-parenting children when their slug is free, and returns the moved counts
+and any alias conflicts. Renames go through `PATCH /categories/{id}`, which
+now recomputes the slug, rejects same-parent slug collisions, and clears the
+concept embedding for rebuild. Merged concepts are hidden from browse/tree
+but kept for history. The Review tab exposes merge buttons on possible
+duplicates and an **Analyze taxonomy** panel with Apply actions. The
+"automatic after N new documents" cadence is not wired; consolidation is
+on-demand for now.
 
 ## 8. Two-pass taxonomy proposal (optional slice)
 

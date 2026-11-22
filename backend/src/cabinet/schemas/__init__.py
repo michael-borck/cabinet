@@ -176,6 +176,41 @@ class CategoryApprove(BaseModel):
     definition: str | None = None
 
 
+class CategoryMergeRequest(BaseModel):
+    target_id: int
+
+
+class CategoryMergeResponse(BaseModel):
+    source_id: int
+    target_id: int
+    assignments_moved: int = 0
+    aliases_added: int = 0
+    conflicts: list[str] = []
+
+
+class ConsolidationMergeProposal(BaseModel):
+    source_id: int
+    source_name: str
+    target_id: int
+    target_name: str
+    similarity: float | None = None
+    reason: str | None = None
+    origin: str = "deterministic"
+
+
+class ConsolidationRenameProposal(BaseModel):
+    category_id: int
+    current_name: str
+    proposed_name: str
+    reason: str | None = None
+    origin: str = "llm"
+
+
+class ConsolidationResponse(BaseModel):
+    merges: list[ConsolidationMergeProposal] = []
+    renames: list[ConsolidationRenameProposal] = []
+
+
 # ---------------------------------------------------------------------------
 # File schemas
 # ---------------------------------------------------------------------------
