@@ -263,6 +263,8 @@ class ViewQuery(BaseModel):
     sources: list[int] = Field(default_factory=list)
     text: str | None = None
     clusters: Literal["collapse", "separate"] = "collapse"
+    # Version-cluster views (Phase 4c): filter to clustered / singleton docs.
+    versions: Literal["all", "clustered", "singletons"] = "all"
     group_by: Literal["none", "concept", "doc_type", "topic", "source", "month"] = (
         "none"
     )
@@ -412,6 +414,22 @@ class FileVersionBrief(BaseModel):
 class FileVersionList(BaseModel):
     cluster_id: int | None = None
     versions: list[FileVersionBrief] = []
+
+
+class SimilarDocument(BaseModel):
+    document_id: int | None = None
+    file_id: int | None = None
+    filename: str | None = None
+    path: str | None = None
+    summary: str | None = None
+    doc_type: str | None = None
+    topics: list[str] | None = None
+    similarity: float = 0.0
+
+
+class SimilarDocuments(BaseModel):
+    source_document_id: int | None = None
+    items: list[SimilarDocument] = []
 
 
 # ---------------------------------------------------------------------------

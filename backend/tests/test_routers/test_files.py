@@ -321,3 +321,55 @@ async def test_manual_assignment_records_example(
     assert example.source == "manual"
     assert example.filename == "a.txt"
     assert example.content_hash == "sha256:abc"
+
+
+async def test_similar_files_endpoint(
+    client: AsyncClient, session: AsyncSession, tmp_path
+):
+    from cabinet.db.models import ContentFact
+    from cabinet.utils.embeddings import pack_embedding
+
+    source = Source(path=str(tmp_path), recursive=True)
+    session.add(source)
+    await session.flush()
+
+    async def add(digest: str, vector: list[float], name: str) -> File:
+        document = Document(content_hash=digest, status="categorized")
+        session.add(document)
+        await session.flush()
+        session.add(
+            ContentFact(
+                content_hash=digest,
+                extractor_version="1",
+                facts_version=2,
+                summary=name,
+                embedding=pack_embedding(vector),
+            )
+        )
+        file = File(
+            source_id=source.id,
+            document_id=document.id,
+            content_hash=digest,
+            path=str(tmp_path / name),
+            filename=name,
+            size_bytes=1,
+            status="categorized",
+        )
+        session.add(file)
+        await session.flush()
+        return file
+
+    origin = await add("sha256:origin", [1.0, 0.0], "origin.txt")
+    close = await add("sha256:close", [0.9, 0.1], "close.txt")
+    await session.commit()
+
+    response = await client.get(f"/api/v1/files/{origin.id}/similar")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["file_id"] == close.id
+    assert items[0]["similarity"] > 0.9
+
+    assert (
+        await client.get("/api/v1/files/9999/similar")
+    ).status_code == 404

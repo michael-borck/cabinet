@@ -6,7 +6,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useCategories } from '@/hooks/useCategories'
-import { useAssignCategories, useFile, useFileFacts, useFileVersions, useRemoveFileCategory } from '@/hooks/useFiles'
+import { useAssignCategories, useFile, useFileFacts, useFileVersions, useSimilarFiles, useRemoveFileCategory } from '@/hooks/useFiles'
+import type { SimilarDocument } from '@/services/api'
 import { useSelectionStore } from '@/stores/selectionStore'
 
 function formatSize(bytes: number): string {
@@ -97,6 +98,7 @@ export function FileDetailsPanel() {
   const { data: file } = useFile(selectedFileId)
   const { data: facts } = useFileFacts(selectedFileId)
   const { data: versions } = useFileVersions(selectedFileId)
+  const { data: similar } = useSimilarFiles(selectedFileId)
   const removeCat = useRemoveFileCategory()
 
   if (!selectedFileId || !file) {
@@ -192,6 +194,35 @@ export function FileDetailsPanel() {
                   >
                     <span className="truncate">{v.filename}</span>
                     {v.is_primary && <Badge variant="secondary">primary</Badge>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Similar documents (Phase 4c) */}
+          {(similar?.items?.length ?? 0) > 0 && (
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">
+                Similar documents
+              </span>
+              <div className="mt-1 space-y-0.5">
+                {similar.items.map((item: SimilarDocument) => (
+                  <button
+                    key={item.document_id ?? item.filename}
+                    disabled={!item.file_id}
+                    title={item.summary ?? undefined}
+                    onClick={() => {
+                      if (item.file_id) setSelectedFile(item.file_id)
+                    }}
+                    className="flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs hover:bg-accent disabled:opacity-50"
+                  >
+                    <span className="truncate">
+                      {item.filename ?? 'Unknown document'}
+                    </span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {Math.round(item.similarity * 100)}%
+                    </span>
                   </button>
                 ))}
               </div>

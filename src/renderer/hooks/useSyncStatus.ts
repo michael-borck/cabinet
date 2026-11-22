@@ -53,6 +53,7 @@ export function useSyncStatus() {
       qc.invalidateQueries({ queryKey: ['categories'] })
       qc.invalidateQueries({ queryKey: ['file-facts'] })
       qc.invalidateQueries({ queryKey: ['file-versions'] })
+      qc.invalidateQueries({ queryKey: ['similar-files'] })
       qc.invalidateQueries({ queryKey: queryKeys.jobs })
     }
   }, [jobs, qc])

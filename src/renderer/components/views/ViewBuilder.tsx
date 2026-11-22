@@ -74,6 +74,7 @@ export function ViewBuilder() {
   const [collapse, setCollapse] = useState(true)
   const [pinned, setPinned] = useState(false)
   const [groupBy, setGroupBy] = useState<ViewGroupBy>('none')
+  const [versions, setVersions] = useState<'all' | 'clustered' | 'singletons'>('all')
   const [color, setColor] = useState('')
 
   const flatCategories = useMemo(() => {
@@ -88,6 +89,7 @@ export function ViewBuilder() {
     const value: ViewQuery = {
       clusters: collapse ? 'collapse' : 'separate',
       group_by: groupBy,
+      versions,
     }
     if (conceptIds.size > 0) {
       value.concepts = {
@@ -103,7 +105,7 @@ export function ViewBuilder() {
     if (sourceId) value.sources = [Number(sourceId)]
     if (text.trim()) value.text = text.trim()
     return value
-  }, [conceptIds, includeDescendants, docTypes, topics, sourceId, text, collapse, groupBy])
+  }, [conceptIds, includeDescendants, docTypes, topics, sourceId, text, collapse, groupBy, versions])
 
   useEffect(() => {
     if (!open) return
@@ -119,6 +121,7 @@ export function ViewBuilder() {
     setCollapse((view?.query?.clusters ?? 'collapse') === 'collapse')
     setPinned(view?.pinned ?? false)
     setGroupBy((view?.query?.group_by as ViewGroupBy) ?? 'none')
+    setVersions(view?.query?.versions ?? 'all')
     setColor(view?.color ?? '')
     preview.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -251,7 +254,7 @@ export function ViewBuilder() {
               </div>
             </div>
 
-            <div className="flex gap-4">
+            <div className="flex flex-wrap items-center gap-4">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -267,6 +270,22 @@ export function ViewBuilder() {
                   onChange={(event) => setPinned(event.target.checked)}
                 />
                 Pin to top
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                Versions
+                <select
+                  value={versions}
+                  onChange={(event) =>
+                    setVersions(
+                      event.target.value as 'all' | 'clustered' | 'singletons'
+                    )
+                  }
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value="all">All</option>
+                  <option value="clustered">Version clusters</option>
+                  <option value="singletons">Singletons</option>
+                </select>
               </label>
             </div>
 

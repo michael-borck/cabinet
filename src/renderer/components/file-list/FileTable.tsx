@@ -58,6 +58,8 @@ function ViewChips({ view, onEdit }: { view: SavedView; onEdit: () => void }) {
   }
   if (query.text) chips.push(`text: “${query.text}”`)
   if (query.clusters !== 'separate') chips.push('versions collapsed')
+  if (query.versions === 'clustered') chips.push('version clusters only')
+  if (query.versions === 'singletons') chips.push('singletons only')
 
   return (
     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">

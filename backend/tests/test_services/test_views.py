@@ -285,3 +285,36 @@ async def test_facets_and_groups(session: AsyncSession):
         "Finance": 2,
         "Travel": 1,
     }
+
+
+async def test_version_cluster_filter(session: AsyncSession):
+    source = Source(path="/tmp/views", recursive=True)
+    session.add(source)
+    await session.flush()
+
+    first = await _document(session, "sha256:c1", summary="report one")
+    second = await _document(session, "sha256:c2", summary="report two")
+    first.cluster_id = first.id
+    second.cluster_id = first.id
+    singleton = await _document(session, "sha256:s1", summary="report solo")
+    session.add_all(
+        [
+            _file(source.id, first, "report.pdf"),
+            _file(source.id, second, "report_v2.pdf"),
+            _file(source.id, singleton, "solo.pdf"),
+        ]
+    )
+    await session.flush()
+
+    service = ViewQueryService(session)
+
+    clustered = await service.page(ViewQuery(versions="clustered"))
+    assert clustered.total == 1  # the cluster, collapsed
+    assert clustered.files[0].filename == "report.pdf"
+
+    singletons = await service.page(ViewQuery(versions="singletons"))
+    assert singletons.total == 1
+    assert singletons.files[0].filename == "solo.pdf"
+
+    every = await service.page(ViewQuery(versions="all"))
+    assert every.total == 2  # cluster + singleton

@@ -62,6 +62,24 @@ export const getFiles = (params: Record<string, unknown>) =>
 export const getFile = (id: number) => api.get(`/files/${id}`).then(r => r.data)
 export const getFileFacts = (id: number) => api.get(`/files/${id}/facts`).then(r => r.data)
 export const getFileVersions = (id: number) => api.get(`/files/${id}/versions`).then(r => r.data)
+export const getSimilarFiles = (id: number, limit = 10) =>
+  api.get(`/files/${id}/similar`, { params: { limit } }).then(r => r.data)
+
+export interface SimilarDocument {
+  document_id: number | null
+  file_id: number | null
+  filename: string | null
+  path: string | null
+  summary: string | null
+  doc_type: string | null
+  topics: string[] | null
+  similarity: number
+}
+
+export interface SimilarDocuments {
+  source_document_id: number | null
+  items: SimilarDocument[]
+}
 export const assignCategories = (fileId: number, categoryIds: number[]) =>
   api.post(`/files/${fileId}/categories`, { category_ids: categoryIds }).then(r => r.data)
 export const removeFileCategory = (fileId: number, categoryId: number) =>
@@ -120,6 +138,7 @@ export interface ViewQuery {
   sources?: number[]
   text?: string
   clusters?: 'collapse' | 'separate'
+  versions?: 'all' | 'clustered' | 'singletons'
   group_by?: ViewGroupBy
   sort_by?: string
   sort_dir?: 'asc' | 'desc'

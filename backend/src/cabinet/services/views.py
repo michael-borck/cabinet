@@ -346,6 +346,13 @@ class ViewQueryService:
                 text_matches.append(Document.content_hash.in_(hashes))
             conditions.append(or_(*text_matches))
 
+        # Version-cluster views (Phase 4c): clustered docs have a cluster id;
+        # singleton docs (including files without a document) do not.
+        if query.versions == "clustered":
+            conditions.append(Document.cluster_id.isnot(None))
+        elif query.versions == "singletons":
+            conditions.append(Document.cluster_id.is_(None))
+
         return conditions
 
     async def _concept_groups(

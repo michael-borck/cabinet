@@ -25,8 +25,10 @@ from cabinet.schemas import (
     FileResponse,
     FileVersionBrief,
     FileVersionList,
+    SimilarDocuments,
 )
 from cabinet.services.facts import FACTS_VERSION
+from cabinet.services.similar import SimilarDocumentsService
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -214,6 +216,22 @@ async def get_file_versions(
         for index, (document, instance) in enumerate(pairs)
     ]
     return FileVersionList(cluster_id=cluster_id, versions=versions)
+
+
+@router.get("/{file_id}/similar", response_model=SimilarDocuments)
+async def get_similar_files(
+    file_id: int,
+    limit: int = Query(10, ge=1, le=50),
+    session: AsyncSession = Depends(get_session),
+):
+    """Nearest documents by Phase 2b embedding cosine (Phase 4c)."""
+    result = await SimilarDocumentsService(session).for_file(file_id, limit=limit)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {file_id} not found",
+        )
+    return result
 
 
 @router.post(

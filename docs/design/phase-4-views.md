@@ -1,7 +1,8 @@
 # Design: Phase 4 — Views, not one tree
 
-- **Status:** 4a–4b implemented (saved live views + builder/onboarding;
-  facets, grouping, colours); 4c semantic views pending.
+- **Status:** 4a–4c implemented (saved live views + builder/onboarding;
+  facets, grouping, colours; similar documents and version-cluster views).
+  Icon selection remains unwired.
 - **Date:** 2026-11-23
 - **Scope:** Multiple saved, live projections over the facts + concept layer:
   filter builder, grouping, facets, counts, version-cluster handling. No file
@@ -159,6 +160,15 @@ for document types, topics, sources, and months. `GET
 counts need not sum to the total). The view page has a group-by selector with
 group counts and a compact facet summary. The builder persists `group_by` and
 a colour; the sidebar shows the colour and pin. Icon selection is not wired.
+
+**Implemented (4c).** `GET /files/{id}/similar?limit=` ranks other documents
+by cosine over `content_facts.embedding`, resolves a representative file per
+document, and returns facts snippets; the details panel lists them with
+similarity percentages and lets you jump to the match. `ViewQuery.versions`
+(`all` / `clustered` / `singletons`) adds version-cluster views, exposed as a
+builder select and filter chip; clustered counts still collapse per cluster.
+Similarity is brute-force over stored vectors (no vector DB), as designed for
+personal scale.
 
 ## 9. Acceptance criteria
 
