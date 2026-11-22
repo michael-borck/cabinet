@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     watch_poll_interval_seconds: int = 1800
     # Phase 2a facts pass: text budget sent to the summarisation LLM.
     facts_input_max_chars: int = 12000
+    # Phase 3: distinct documents before a provisional concept auto-approves.
+    concept_promotion_threshold: int = 3
 
     model_config = {"env_prefix": "CABINET_"}
 

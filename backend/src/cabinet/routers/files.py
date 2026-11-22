@@ -276,6 +276,22 @@ async def assign_categories(
 
     await session.flush()
 
+    # Phase 3b learning loop: a manual assignment is a positive example.
+    content_hash = file.content_hash or doc.content_hash
+    summary = None
+    if content_hash:
+        fact = await ContentFactRepository.get(session, content_hash)
+        summary = fact.summary if fact is not None else None
+    for cat_id in body.category_ids:
+        await CategoryRepository.add_example(
+            session,
+            cat_id,
+            filename=file.filename,
+            content_hash=content_hash,
+            summary_snippet=summary[:300] if summary else None,
+            source="manual",
+        )
+
     # Relationship collections are stale after raw FK inserts; expire them
     # so the re-fetch reloads the merged effective set.
     session.expire(file, ["categories", "document"])
@@ -304,13 +320,18 @@ async def remove_category(
     # Remove at whichever level(s) the assignment lives, so the category
     # actually disappears from the effective set.
     removed = False
+    ai_confident = False
     if file.document is not None:
         for dc in list(file.document.categories):
             if dc.category_id == category_id:
+                if not dc.is_manual and (dc.confidence or 0.0) >= 0.8:
+                    ai_confident = True
                 await session.delete(dc)
                 removed = True
     for fc in list(file.categories):
         if fc.category_id == category_id:
+            if not fc.is_manual and (fc.confidence or 0.0) >= 0.8:
+                ai_confident = True
             await session.delete(fc)
             removed = True
 
@@ -318,6 +339,25 @@ async def remove_category(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File {file_id} does not have category {category_id}",
+        )
+
+    # Learning loop: a confidently AI-assigned category the user removed is
+    # a negative example (used by later consolidation/learning passes).
+    if ai_confident:
+        content_hash = file.content_hash or (
+            file.document.content_hash if file.document is not None else None
+        )
+        summary = None
+        if content_hash:
+            fact = await ContentFactRepository.get(session, content_hash)
+            summary = fact.summary if fact is not None else None
+        await CategoryRepository.add_example(
+            session,
+            category_id,
+            filename=file.filename,
+            content_hash=content_hash,
+            summary_snippet=summary[:300] if summary else None,
+            source="manual_negative",
         )
 
     await session.flush()

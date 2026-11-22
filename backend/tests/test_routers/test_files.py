@@ -6,7 +6,14 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cabinet.db.models import Category, Document, DocumentCategory, File, Source
+from cabinet.db.models import (
+    Category,
+    CategoryExample,
+    Document,
+    DocumentCategory,
+    File,
+    Source,
+)
 
 
 async def _setup_categorized_file(session: AsyncSession) -> tuple[File, Category]:
@@ -290,3 +297,27 @@ async def test_file_versions_endpoint(
     marked = [v for v in body["versions"] if v["is_primary"]]
     assert len(marked) == 1
     assert marked[0]["filename"] == "report_v2.txt"  # newest by mtime
+
+
+async def test_manual_assignment_records_example(
+    client: AsyncClient, session: AsyncSession
+):
+    file, category = await _setup_categorized_file(session)
+
+    response = await client.post(
+        f"/api/v1/files/{file.id}/categories",
+        json={"category_ids": [category.id]},
+    )
+    assert response.status_code == 201
+
+    example = (
+        await session.execute(
+            select(CategoryExample).where(
+                CategoryExample.category_id == category.id
+            )
+        )
+    ).scalar_one_or_none()
+    assert example is not None
+    assert example.source == "manual"
+    assert example.filename == "a.txt"
+    assert example.content_hash == "sha256:abc"

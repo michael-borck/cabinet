@@ -147,6 +147,35 @@ class CategoryTreeNode(CategoryResponse):
     children: list[CategoryTreeNode] = []
 
 
+class CategoryReviewSample(BaseModel):
+    file_id: int
+    filename: str
+    summary: str | None = None
+
+
+class CategoryReviewDuplicate(BaseModel):
+    category_id: int
+    name: str
+    path: str
+    similarity: float
+
+
+class CategoryReviewItem(BaseModel):
+    id: int
+    name: str
+    path: str
+    definition: str | None = None
+    origin: str = "ai"
+    document_count: int = 0
+    created_at: datetime
+    samples: list[CategoryReviewSample] = []
+    possible_duplicates: list[CategoryReviewDuplicate] = []
+
+
+class CategoryApprove(BaseModel):
+    definition: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # File schemas
 # ---------------------------------------------------------------------------

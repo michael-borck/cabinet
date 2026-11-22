@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText } from 'lucide-react'
+import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText, Inbox } from 'lucide-react'
 import { isAxiosError } from 'axios'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig } from '@/services/api'
+import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { toast } from 'sonner'
@@ -409,6 +410,116 @@ function LLMTab() {
   )
 }
 
+interface ReviewItem {
+  id: number
+  name: string
+  path: string
+  definition: string | null
+  origin: string
+  document_count: number
+  samples: { file_id: number; filename: string; summary: string | null }[]
+  possible_duplicates: {
+    category_id: number
+    name: string
+    path: string
+    similarity: number
+  }[]
+}
+
+function ReviewTab() {
+  const qc = useQueryClient()
+  const { data, isPending, isError } = useQuery({
+    queryKey: queryKeys.categoryReview,
+    queryFn: getCategoryReview,
+  })
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.categoryReview })
+    qc.invalidateQueries({ queryKey: queryKeys.categories() })
+    qc.invalidateQueries({ queryKey: ['files'] })
+  }
+  const approve = useMutation({
+    mutationFn: (id: number) => approveCategory(id),
+    onSuccess: () => { invalidate(); toast.success('Concept approved') },
+    onError: (err) => { toast.error(`Failed to approve: ${errorDetail(err)}`) },
+  })
+  const reject = useMutation({
+    mutationFn: (id: number) => rejectCategory(id),
+    onSuccess: () => { invalidate(); toast.success('Concept rejected') },
+    onError: (err) => { toast.error(`Failed to reject: ${errorDetail(err)}`) },
+  })
+
+  if (isPending) {
+    return <p className="text-sm text-muted-foreground">Loading review queue…</p>
+  }
+  if (isError) {
+    return <p className="text-sm text-destructive">Failed to load the review queue.</p>
+  }
+
+  const items = (data ?? []) as ReviewItem[]
+  if (items.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No concepts are awaiting review. New AI names appear here until they cover
+        enough documents or you approve them.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-medium">Provisional concepts</h3>
+        <p className="text-xs text-muted-foreground">
+          Approve a concept to keep it, or reject it to remove the concept and its
+          assignments. Possible duplicates are suggestions, not merged automatically.
+        </p>
+      </div>
+      {items.map((item) => (
+        <div key={item.id} className="rounded-md border p-3 text-sm">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate font-medium">{item.path}</div>
+              <div className="text-xs text-muted-foreground">
+                {item.document_count} document{item.document_count === 1 ? '' : 's'}
+              </div>
+            </div>
+            <div className="flex shrink-0 gap-1">
+              <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate(item.id)}>
+                Approve
+              </Button>
+              <Button size="sm" variant="outline" disabled={reject.isPending} onClick={() => reject.mutate(item.id)}>
+                Reject
+              </Button>
+            </div>
+          </div>
+          {item.definition && <p className="mt-2 text-xs">{item.definition}</p>}
+          {item.samples.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+              {item.samples.map((sample) => (
+                <li key={sample.file_id} className="truncate">
+                  {sample.filename}
+                  {sample.summary ? ` — ${sample.summary}` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+          {item.possible_duplicates.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
+              <span className="text-muted-foreground">Possible duplicates:</span>
+              {item.possible_duplicates.map((dup) => (
+                <Badge key={dup.category_id} variant="secondary">
+                  {dup.path} ({Math.round(dup.similarity * 100)}%)
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function SettingsDialog() {
   return (
     <Dialog.Root>
@@ -429,9 +540,13 @@ export function SettingsDialog() {
               <Tabs.Trigger value="llm" className="px-4 py-2 text-sm data-[state=active]:border-b-2 data-[state=active]:border-primary">
                 <Brain className="mr-1 inline h-4 w-4" /> LLM
               </Tabs.Trigger>
+              <Tabs.Trigger value="review" className="px-4 py-2 text-sm data-[state=active]:border-b-2 data-[state=active]:border-primary">
+                <Inbox className="mr-1 inline h-4 w-4" /> Review
+              </Tabs.Trigger>
             </Tabs.List>
             <Tabs.Content value="sources" className="pt-4"><SourcesTab /></Tabs.Content>
             <Tabs.Content value="llm" className="pt-4"><LLMTab /></Tabs.Content>
+            <Tabs.Content value="review" className="pt-4"><ReviewTab /></Tabs.Content>
           </Tabs.Root>
           <Dialog.Close asChild>
             <button className="absolute right-4 top-4">

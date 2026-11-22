@@ -8,11 +8,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cabinet.config import get_settings
 from cabinet.db.models import Category, DocumentCategory, File, FileCategory
-from cabinet.db.repositories import DocumentRepository
+from cabinet.db.repositories import CategoryRepository, DocumentRepository
 from cabinet.llm.base import LLMProvider
-from cabinet.services.concepts import ConceptResolver
+from cabinet.services.concepts import ConceptCandidate, ConceptResolver
 from cabinet.services.embeddings import EmbeddingService
+from cabinet.utils.embeddings import unpack_embedding
 from cabinet.utils.text import truncate_text
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ class CategorizationService:
         self._session = session
         self._provider = provider
         self._resolver = ConceptResolver(session, embedding_service)
+        self._promotion_threshold = get_settings().concept_promotion_threshold
 
     # ------------------------------------------------------------------
     # Public API
@@ -79,14 +82,16 @@ class CategorizationService:
 
         # Build prompts and call the LLM -------------------------------------
         system_prompt = self._build_system_prompt()
-        user_prompt = await self._build_user_prompt(
+        user_prompt, candidates_by_index = await self._build_user_prompt(
             files, existing_categories, extracted_texts, facts
         )
 
         llm_result = await self._provider.complete_json(system_prompt, user_prompt)
 
         # Resolve categories and persist assignments --------------------------
-        return await self._resolve_categories(files, llm_result)
+        return await self._resolve_categories(
+            files, llm_result, candidates_by_index
+        )
 
     # ------------------------------------------------------------------
     # Prompt building
@@ -97,16 +102,16 @@ class CategorizationService:
         return (
             "You are an expert file-organisation assistant. Your task is to assign "
             "one or more categories to each file based on its filename, extension, "
-            "size, and extracted text content.\n\n"
+            "size, extracted facts, and (when present) its listed candidate concepts.\n\n"
             "Guidelines:\n"
-            "- Use a hierarchical notation: \"Parent > Child\" (e.g. \"Finance > Invoices\").\n"
-            "- Reuse existing categories when they fit. Only create new categories when "
-            "the file clearly does not belong to any existing one.\n"
-            "- Assign a confidence score between 0.0 and 1.0 for each category.\n"
-            "- Set \"is_new\" to true only when proposing a brand-new category that "
-            "does not exist yet.\n"
-            "- Prefer specific sub-categories over broad top-level ones.\n"
-            "- Each file should have at least one category.\n\n"
+            "- When a file lists candidate concepts, pick from them by `concept_id`.\n"
+            "- Use `new_name` only when no candidate is a reasonable fit.\n"
+            "- New names use hierarchical notation: \"Parent > Child\"; keep them at "
+            "most 4 levels deep and prefer an existing parent.\n"
+            "- Reuse existing concepts whenever they fit; do not invent synonyms for "
+            "a concept that is already listed.\n"
+            "- Assign a confidence score between 0.0 and 1.0 for each assignment.\n"
+            "- Each file should have at least one assignment.\n\n"
             "Respond ONLY with a valid JSON object in the format described in the "
             "user prompt. No markdown, no commentary."
         )
@@ -117,23 +122,52 @@ class CategorizationService:
         existing_categories: list[Category],
         extracted_texts: dict[int, str],
         facts: dict[int, Any] | None = None,
-    ) -> str:
-        """Build the user prompt containing file data and the existing category tree."""
-        # --- Existing category tree ------------------------------------------
-        category_tree_lines: list[str] = []
+    ) -> tuple[str, dict[int, dict[int, Category]]]:
+        """Build the prompt and the per-file candidate concept map.
+
+        Candidate retrieval (Phase 3b) replaces the whole-tree prompt for
+        files whose document has an embedding. The tree is only included when
+        at least one file has no candidates (or none exist).
+        """
+        facts = facts or {}
         cat_by_id: dict[int, Category] = {c.id: c for c in existing_categories}
 
-        for cat in existing_categories:
-            path_parts = _category_path(cat, cat_by_id)
-            category_tree_lines.append(f"  - {' > '.join(path_parts)}")
+        candidate_blocks: dict[int, str] = {}
+        candidates_by_index: dict[int, dict[int, Category]] = {}
+        any_candidates = False
+        all_have_candidates = bool(files)
 
-        if category_tree_lines:
-            tree_section = "Existing categories:\n" + "\n".join(category_tree_lines)
-        else:
-            tree_section = "Existing categories: (none yet)"
+        for idx, file in enumerate(files):
+            fact = facts.get(file.id)
+            candidates = None
+            if fact is not None and getattr(fact, "embedding", None):
+                candidates = await self._resolver.candidates_for_embedding(
+                    unpack_embedding(fact.embedding)
+                )
+            if candidates:
+                any_candidates = True
+                candidates_by_index[idx] = {
+                    candidate.category.id: candidate.category
+                    for candidate in candidates
+                }
+                candidate_blocks[idx] = _render_candidates(candidates, cat_by_id)
+            else:
+                all_have_candidates = False
+
+        # --- Existing category tree (fallback only) ---------------------------
+        tree_section = ""
+        if not any_candidates or not all_have_candidates:
+            category_tree_lines = [
+                f"  - {' > '.join(_category_path(cat, cat_by_id))}"
+                for cat in existing_categories
+            ]
+            tree_section = (
+                "Existing categories:\n" + "\n".join(category_tree_lines)
+                if category_tree_lines
+                else "Existing categories: (none yet)"
+            )
 
         # --- File entries ----------------------------------------------------
-        facts = facts or {}
         file_lines: list[str] = []
         for idx, file in enumerate(files):
             context = ""
@@ -151,9 +185,16 @@ class CategorizationService:
                         f" {text_snippet}"
                     )
 
+            candidate_block = candidate_blocks.get(idx, "")
+            if not candidate_block and not all_have_candidates:
+                candidate_block = (
+                    "\n    No candidate concepts; choose an existing name from "
+                    "the tree or propose new_name."
+                )
+
             file_lines.append(
                 f"[{idx}] filename={file.filename!r}  extension={file.extension!r}  "
-                f"size_bytes={file.size_bytes}{context}"
+                f"size_bytes={file.size_bytes}{context}{candidate_block}"
             )
 
         files_section = "Files to categorize:\n" + "\n\n".join(file_lines)
@@ -163,14 +204,18 @@ class CategorizationService:
             "Respond with JSON in exactly this format:\n"
             "```\n"
             '{"files": [\n'
-            '  {"file_index": 0, "categories": [\n'
-            '    {"name": "Parent > Child", "confidence": 0.95, "is_new": false}\n'
+            '  {"file_index": 0, "assignments": [\n'
+            '    {"concept_id": 12, "confidence": 0.95},\n'
+            '    {"new_name": "Parent > Child", "confidence": 0.71}\n'
             "  ]}\n"
             "]}\n"
             "```"
         )
 
-        return f"{tree_section}\n\n{files_section}\n\n{format_section}"
+        prompt = f"{files_section}\n\n{format_section}"
+        if tree_section:
+            prompt = f"{tree_section}\n\n{prompt}"
+        return prompt, candidates_by_index
 
     # ------------------------------------------------------------------
     # Category resolution
@@ -180,6 +225,7 @@ class CategorizationService:
         self,
         files: list[File],
         llm_result: dict[str, Any],
+        candidates_by_index: dict[int, dict[int, Category]] | None = None,
     ) -> set[int]:
         """Parse the LLM response and create/update category assignments.
 
@@ -221,10 +267,15 @@ class CategorizationService:
                 continue
 
             file = files[file_index]
-            categories_data = entry.get("categories")
-            if not isinstance(categories_data, list):
+            candidates_by_index = candidates_by_index or {}
+            candidate_map = candidates_by_index.get(file_index, {})
+            # New contract is `assignments`; accept legacy `categories` too.
+            assignments_data = entry.get("assignments")
+            if not isinstance(assignments_data, list):
+                assignments_data = entry.get("categories")
+            if not isinstance(assignments_data, list):
                 logger.warning(
-                    "LLM returned no categories list for file %d; skipping", file.id
+                    "LLM returned no assignments for file %d; skipping", file.id
                 )
                 continue
 
@@ -232,17 +283,35 @@ class CategorizationService:
                 # Resolve all new categories BEFORE touching old assignments,
                 # so a failure here leaves the file's existing state intact.
                 resolved: list[tuple[Category, float]] = []
-                for cat_data in categories_data:
+                for cat_data in assignments_data:
                     if not isinstance(cat_data, dict):
-                        continue
-                    cat_name = str(cat_data.get("name") or "").strip()
-                    if not cat_name:
                         continue
                     try:
                         confidence = float(cat_data.get("confidence", 0.0))
                     except (TypeError, ValueError):
                         confidence = 0.0
-                    category = await self._get_or_create_from_path(cat_name)
+
+                    category: Category | None = None
+                    raw_id = cat_data.get("concept_id")
+                    if raw_id is not None:
+                        try:
+                            concept_id = int(raw_id)
+                        except (TypeError, ValueError):
+                            concept_id = None
+                        if concept_id is not None:
+                            category = candidate_map.get(concept_id)
+                    if category is None:
+                        proposed = str(
+                            cat_data.get("new_name")
+                            or cat_data.get("name")
+                            or ""
+                        ).strip()
+                        if proposed:
+                            category = await self._get_or_create_from_path(
+                                proposed
+                            )
+                    if category is None:
+                        continue
                     resolved.append((category, confidence))
 
                 if not resolved:
@@ -307,6 +376,13 @@ class CategorizationService:
                     )
                     await self._session.flush()
 
+                    if category.status == "provisional":
+                        await CategoryRepository.promote_if_ready(
+                            self._session,
+                            category.id,
+                            threshold=self._promotion_threshold,
+                        )
+
                 assigned.add(file.id)
             except Exception:
                 logger.exception(
@@ -345,6 +421,41 @@ class CategorizationService:
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
+
+def _render_candidates(
+    candidates: list[ConceptCandidate], by_id: dict[int, Category]
+) -> str:
+    """Render the per-file candidate concepts for the assignment prompt."""
+    lines = ["\n    Candidate concepts (choose by id):"]
+    for candidate in candidates:
+        path = " > ".join(_category_path(candidate.category, by_id))
+        definition = _shorten(candidate.category.definition)
+        definition_text = f" — {definition}" if definition else ""
+        example_text = ""
+        if candidate.examples:
+            rendered = "; ".join(
+                f"{example.filename}"
+                + (
+                    f" ({_shorten(example.summary_snippet)})"
+                    if example.summary_snippet
+                    else ""
+                )
+                for example in candidate.examples
+            )
+            example_text = f"  Examples: {rendered}"
+        lines.append(
+            f"      - id={candidate.category.id}  {path}"
+            f"{definition_text}{example_text}"
+        )
+    return "\n".join(lines)
+
+
+def _shorten(text: str | None, limit: int = 120) -> str:
+    if not text:
+        return ""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
 
 def _render_facts(fact: Any) -> str:
     """Render cached facts as the file's categorisation context."""

@@ -988,6 +988,85 @@ class CategoryRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_document_count(
+        session: AsyncSession, category_id: int
+    ) -> int:
+        """Distinct documents assigned to a concept (either level)."""
+        keys: set[int] = set()
+        doc_rows = (
+            await session.execute(
+                select(DocumentCategory.document_id).where(
+                    DocumentCategory.category_id == category_id
+                )
+            )
+        ).scalars().all()
+        keys.update(doc_rows)
+        inst_rows = (
+            await session.execute(
+                select(File.document_id, File.id)
+                .join(FileCategory, File.id == FileCategory.file_id)
+                .where(FileCategory.category_id == category_id)
+            )
+        ).all()
+        for document_id, file_id in inst_rows:
+            keys.add(document_id if document_id is not None else -file_id)
+        return len(keys)
+
+    @staticmethod
+    async def get_sample_files(
+        session: AsyncSession, category_id: int, limit: int = 3
+    ) -> list[tuple[int, str, str | None]]:
+        """A few (file_id, filename, content_hash) examples for review."""
+        rows = list(
+            (
+                await session.execute(
+                    select(File.id, File.filename, File.content_hash)
+                    .join(
+                        DocumentCategory,
+                        DocumentCategory.document_id == File.document_id,
+                    )
+                    .where(DocumentCategory.category_id == category_id)
+                    .order_by(File.id)
+                    .limit(limit)
+                )
+            ).all()
+        )
+        if len(rows) < limit:
+            seen = {row[0] for row in rows}
+            instance_rows = (
+                await session.execute(
+                    select(File.id, File.filename, File.content_hash)
+                    .join(FileCategory, FileCategory.file_id == File.id)
+                    .where(FileCategory.category_id == category_id)
+                    .order_by(File.id)
+                    .limit(limit)
+                )
+            ).all()
+            for row in instance_rows:
+                if row[0] in seen:
+                    continue
+                rows.append(row)
+                seen.add(row[0])
+                if len(rows) >= limit:
+                    break
+        return [(row[0], row[1], row[2]) for row in rows[:limit]]
+
+    @staticmethod
+    async def promote_if_ready(
+        session: AsyncSession, category_id: int, threshold: int = 3
+    ) -> bool:
+        """Approve a provisional concept once it covers enough documents."""
+        category = await session.get(Category, category_id)
+        if category is None or category.status != "provisional":
+            return False
+        count = await CategoryRepository.get_document_count(session, category_id)
+        if count < threshold:
+            return False
+        category.status = "approved"
+        await session.flush()
+        return True
+
+    @staticmethod
     async def get_by_slug(session: AsyncSession, slug: str) -> Category | None:
         result = await session.execute(select(Category).where(Category.slug == slug))
         return result.scalar_one_or_none()

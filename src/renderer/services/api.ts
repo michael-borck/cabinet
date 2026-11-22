@@ -50,6 +50,11 @@ export const createCategory = (data: { name: string; parent_id?: number; color?:
 export const updateCategory = (id: number, data: Record<string, unknown>) =>
   api.patch(`/categories/${id}`, data).then(r => r.data)
 export const deleteCategory = (id: number) => api.delete(`/categories/${id}`)
+export const getCategoryReview = () => api.get('/categories/review').then(r => r.data)
+export const approveCategory = (id: number, data?: { definition?: string }) =>
+  api.post(`/categories/${id}/approve`, data ?? {}).then(r => r.data)
+export const rejectCategory = (id: number) =>
+  api.post(`/categories/${id}/reject`).then(r => r.data)
 
 // Jobs
 export const getJobs = () => api.get('/jobs').then(r => r.data)

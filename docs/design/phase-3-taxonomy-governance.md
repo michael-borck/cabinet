@@ -1,7 +1,8 @@
 # Design: Phase 3 — Taxonomy governance
 
-- **Status:** 3a implemented (schema, aliases, provisional concepts,
-  resolution order, concept-embedding backfill); 3b–3d pending.
+- **Status:** 3a–3b implemented (schema, aliases, provisional concepts,
+  resolution order, concept-embedding backfill; candidate-ID assignment,
+  learning examples, auto-promotion, review inbox). 3c–3d pending.
 - **Date:** 2026-11-23
 - **Scope:** Govern the *vocabulary* of the category tree: stable concepts,
   aliases, provisional concepts, a human review inbox, consolidation, and a
@@ -185,6 +186,17 @@ When the user adds or removes a category manually:
 - Manual assignments remain `is_manual = true` and are never removed by
   re-categorisation (existing invariant).
 
+**Implemented (3b).** Candidate retrieval ranks approved concepts by
+cosine against the document's Phase 2b embedding (top 20), and the prompt
+offers them by `concept_id` with up to two examples each; the full tree is
+included only as a fallback when a file has no candidates. The parser
+accepts `assignments` (`concept_id` or `new_name`) and the legacy
+`categories` shape. Manual assignments write a positive `category_examples`
+row (content hash + summary snippet); removing a confidently AI-assigned
+category writes `manual_negative`. Provisional concepts auto-promote at
+`concept_promotion_threshold` (default 3) and can be approved/rejected from
+the review inbox (merge is 3c).
+
 ## 6. Provisional concepts and the review inbox
 
 - AI-created concepts start `provisional`.
@@ -200,6 +212,14 @@ When the user adds or removes a category manually:
   concepts side by side.
 - The inbox is the *only* place merges are applied; the pipeline never
   merges on its own.
+
+**Implemented (3b).** `GET /categories/review` lists provisional concepts
+with document count, up to three document samples (filename + facts
+summary), and near-duplicate approved concepts ranked by embedding/name.
+`POST /categories/{id}/approve` (optional definition) and
+`POST /categories/{id}/reject` (deletes the concept and its assignments)
+back a Review tab in Settings. Merge and rename are intentionally left to
+3c.
 
 ## 7. Consolidation pass
 

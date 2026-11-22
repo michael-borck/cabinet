@@ -15,14 +15,19 @@ from cabinet.db.repositories import (
 from cabinet.schemas import (
     CategoryAliasCreate,
     CategoryAliasResponse,
+    CategoryApprove,
     CategoryBrief,
     CategoryCreate,
     CategoryResponse,
+    CategoryReviewDuplicate,
+    CategoryReviewItem,
+    CategoryReviewSample,
     CategoryTreeNode,
     CategoryUpdate,
     FileListResponse,
     FileResponse,
 )
+from cabinet.services.concepts import TaxonomyReviewService
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
@@ -84,6 +89,77 @@ async def list_categories(
             )
         )
     return results
+
+
+@router.get("/review", response_model=list[CategoryReviewItem])
+async def list_category_review(session: AsyncSession = Depends(get_session)):
+    """Provisional concepts awaiting review, with samples and duplicates."""
+    items = await TaxonomyReviewService(session).items()
+    return [
+        CategoryReviewItem(
+            id=item.category.id,
+            name=item.category.name,
+            path=item.path,
+            definition=item.category.definition,
+            origin=item.category.origin,
+            document_count=item.document_count,
+            created_at=item.category.created_at,
+            samples=[
+                CategoryReviewSample(
+                    file_id=sample.file_id,
+                    filename=sample.filename,
+                    summary=sample.summary,
+                )
+                for sample in item.samples
+            ],
+            possible_duplicates=[
+                CategoryReviewDuplicate(
+                    category_id=duplicate.category_id,
+                    name=duplicate.name,
+                    path=duplicate.path,
+                    similarity=duplicate.similarity,
+                )
+                for duplicate in item.possible_duplicates
+            ],
+        )
+        for item in items
+    ]
+
+
+@router.post(
+    "/{category_id}/approve", response_model=CategoryResponse
+)
+async def approve_category(
+    category_id: int,
+    body: CategoryApprove | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Approve a provisional concept (optionally setting its definition)."""
+    category = await TaxonomyReviewService(session).approve(
+        category_id, definition=body.definition if body is not None else None
+    )
+    if category is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Provisional category {category_id} not found",
+        )
+    count = await CategoryRepository.get_document_count(session, category_id)
+    return _category_response(category, file_count=count)
+
+
+@router.post(
+    "/{category_id}/reject", status_code=status.HTTP_204_NO_CONTENT
+)
+async def reject_category(
+    category_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Reject a provisional concept; its assignments are removed."""
+    if not await TaxonomyReviewService(session).reject(category_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Provisional category {category_id} not found",
+        )
 
 
 @router.post("", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)

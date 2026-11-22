@@ -15,12 +15,13 @@ provisional creation still work.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cabinet.db.models import Category
-from cabinet.db.repositories import CategoryRepository
+from cabinet.db.models import Category, CategoryExample
+from cabinet.db.repositories import CategoryRepository, ContentFactRepository
 from cabinet.services.embeddings import EmbeddingService
 from cabinet.utils.concepts import concept_embedding_text, normalize_concept
 from cabinet.utils.embeddings import cosine_similarity, pack_embedding, unpack_embedding
@@ -31,6 +32,27 @@ logger = logging.getLogger(__name__)
 # D11: reuse the Phase 2b embedding config.
 AUTO_ALIAS_THRESHOLD = 0.92
 REVIEW_BAND_THRESHOLD = 0.82
+
+
+@dataclass
+class ConceptCandidate:
+    """A concept offered to the assignment prompt."""
+
+    category: Category
+    similarity: float
+    examples: list[CategoryExample] = field(default_factory=list)
+
+
+def concept_path(category: Category, by_id: dict[int, Category]) -> str:
+    """Return the full "Parent > Child" path for a concept."""
+    parts: list[str] = []
+    current: Category | None = category
+    seen: set[int] = set()
+    while current is not None and current.id not in seen:
+        seen.add(current.id)
+        parts.append(current.name)
+        current = by_id.get(current.parent_id) if current.parent_id else None
+    return " > ".join(reversed(parts))
 
 
 class ConceptResolver:
@@ -76,9 +98,10 @@ class ConceptResolver:
         if category is not None:
             return await self._follow_merge(category)
 
-        # 5. New provisional concept.
+        # 5. New provisional concept (embed it immediately when possible so
+        # the review inbox can rank possible duplicates).
         logger.info("Creating provisional concept %r", cleaned)
-        return await CategoryRepository.create(
+        created = await CategoryRepository.create(
             self._session,
             name=cleaned,
             parent_id=parent_id,
@@ -86,6 +109,17 @@ class ConceptResolver:
             status="provisional",
             origin="ai",
         )
+        if self._embeddings is not None:
+            vector = await self._name_vector(cleaned)
+            if vector:
+                await CategoryRepository.set_embedding(
+                    self._session,
+                    created.id,
+                    embedding=pack_embedding(vector),
+                    model=self._embeddings.model,
+                    dim=len(vector),
+                )
+        return created
 
     # ------------------------------------------------------------------
     # Resolution helpers
@@ -222,6 +256,50 @@ class ConceptResolver:
         self._name_vectors[key] = vector
         return vector or None
 
+    async def candidates_for_embedding(
+        self, vector: list[float], *, limit: int = 20
+    ) -> list[ConceptCandidate] | None:
+        """Nearest approved concepts for one document (Phase 3b).
+
+        Returns ``None`` when no approved concept has an embedding, which
+        tells the caller to fall back to the full-tree prompt.
+        """
+        if not vector:
+            return None
+        categories = await CategoryRepository.list_all(self._session)
+        scored: list[tuple[float, Category]] = []
+        for category in categories:
+            if category.status != "approved" or not category.embedding:
+                continue
+            scored.append(
+                (
+                    cosine_similarity(vector, unpack_embedding(category.embedding)),
+                    category,
+                )
+            )
+        if not scored:
+            return None
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+
+        candidates: list[ConceptCandidate] = []
+        for similarity, category in scored[:limit]:
+            examples = sorted(
+                [
+                    example
+                    for example in category.examples
+                    if example.source != "manual_negative"
+                ],
+                key=lambda example: 0 if example.source == "manual" else 1,
+            )
+            candidates.append(
+                ConceptCandidate(
+                    category=category,
+                    similarity=similarity,
+                    examples=examples[:2],
+                )
+            )
+        return candidates
+
     async def _follow_merge(self, category: Category) -> Category:
         """Follow ``merged_into`` links so assignments land on the winner."""
         seen: set[int] = set()
@@ -237,3 +315,138 @@ class ConceptResolver:
                 break
             current = target
         return current
+
+
+# ---------------------------------------------------------------------------
+# Review inbox (Phase 3b)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ReviewSample:
+    file_id: int
+    filename: str
+    summary: str | None = None
+
+
+@dataclass
+class ReviewDuplicate:
+    category_id: int
+    name: str
+    path: str
+    similarity: float
+
+
+@dataclass
+class ReviewItem:
+    category: Category
+    path: str
+    document_count: int
+    samples: list[ReviewSample] = field(default_factory=list)
+    possible_duplicates: list[ReviewDuplicate] = field(default_factory=list)
+
+
+def possible_duplicates(
+    category: Category,
+    candidates: list[Category],
+    by_id: dict[int, Category],
+    *,
+    threshold: float = REVIEW_BAND_THRESHOLD,
+    limit: int = 3,
+) -> list[ReviewDuplicate]:
+    """Rank approved concepts that look like *category* (embedding + name)."""
+    target_name = normalize_concept(category.name)
+    results: list[ReviewDuplicate] = []
+    for other in candidates:
+        if other.id == category.id or other.status != "approved":
+            continue
+        similarity = 0.0
+        if category.embedding and other.embedding:
+            similarity = cosine_similarity(
+                unpack_embedding(category.embedding),
+                unpack_embedding(other.embedding),
+            )
+        name_match = normalize_concept(other.name) == target_name
+        score = max(similarity, 1.0 if name_match else 0.0)
+        if score < threshold:
+            continue
+        results.append(
+            ReviewDuplicate(
+                category_id=other.id,
+                name=other.name,
+                path=concept_path(other, by_id),
+                similarity=round(score, 3),
+            )
+        )
+    results.sort(key=lambda item: item.similarity, reverse=True)
+    return results[:limit]
+
+
+class TaxonomyReviewService:
+    """Builds the provisional-concept inbox and applies review actions."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def items(self) -> list[ReviewItem]:
+        categories = await CategoryRepository.list_all(self._session)
+        by_id = {category.id: category for category in categories}
+        approved = [category for category in categories if category.status == "approved"]
+
+        results: list[ReviewItem] = []
+        for category in categories:
+            if category.status != "provisional":
+                continue
+            count = await CategoryRepository.get_document_count(
+                self._session, category.id
+            )
+            sample_rows = await CategoryRepository.get_sample_files(
+                self._session, category.id, limit=3
+            )
+            samples: list[ReviewSample] = []
+            for file_id, filename, content_hash in sample_rows:
+                summary: str | None = None
+                if content_hash:
+                    fact = await ContentFactRepository.get(
+                        self._session, content_hash
+                    )
+                    summary = fact.summary if fact is not None else None
+                samples.append(
+                    ReviewSample(
+                        file_id=file_id, filename=filename, summary=summary
+                    )
+                )
+            results.append(
+                ReviewItem(
+                    category=category,
+                    path=concept_path(category, by_id),
+                    document_count=count,
+                    samples=samples,
+                    possible_duplicates=possible_duplicates(
+                        category, approved, by_id
+                    ),
+                )
+            )
+        return results
+
+    async def approve(
+        self, category_id: int, definition: str | None = None
+    ) -> Category | None:
+        category = await CategoryRepository.get_with_relations(
+            self._session, category_id
+        )
+        if category is None or category.status != "provisional":
+            return None
+        category.status = "approved"
+        if definition is not None:
+            category.definition = definition
+        await self._session.flush()
+        return category
+
+    async def reject(self, category_id: int) -> bool:
+        category = await CategoryRepository.get_by_id(self._session, category_id)
+        if category is None or category.status != "provisional":
+            return False
+        await self._session.delete(category)
+        await self._session.flush()
+        return True

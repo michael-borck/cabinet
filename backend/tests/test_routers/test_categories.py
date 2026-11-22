@@ -118,3 +118,80 @@ async def test_category_alias_crud_and_conflict(client: AsyncClient):
             f"/api/v1/categories/{billing['id']}/aliases/{alias['id']}"
         )
     ).status_code == 404
+
+
+async def test_category_review_approve_and_reject(client: AsyncClient, session, tmp_path):
+    from cabinet.db.models import (
+        Document,
+        DocumentCategory,
+        File,
+        Source,
+    )
+    from cabinet.db.repositories import CategoryRepository
+    from cabinet.utils.embeddings import pack_embedding
+
+    approved = await CategoryRepository.create(session, name="Invoice")
+    await CategoryRepository.set_embedding(
+        session,
+        approved.id,
+        embedding=pack_embedding([1.0, 0.0]),
+        model="m",
+        dim=2,
+    )
+    provisional = await CategoryRepository.create(
+        session, name="Bills", status="provisional", origin="ai"
+    )
+    await CategoryRepository.set_embedding(
+        session,
+        provisional.id,
+        embedding=pack_embedding([0.99, 0.05]),
+        model="m",
+        dim=2,
+    )
+
+    source = Source(path=str(tmp_path), recursive=True)
+    session.add(source)
+    await session.flush()
+    document = Document(content_hash="sha256:rev", status="pending")
+    session.add(document)
+    await session.flush()
+    session.add(
+        File(
+            source_id=source.id,
+            document_id=document.id,
+            content_hash=document.content_hash,
+            path=str(tmp_path / "bill.pdf"),
+            filename="bill.pdf",
+            size_bytes=1,
+            status="pending",
+        )
+    )
+    session.add(
+        DocumentCategory(document_id=document.id, category_id=provisional.id)
+    )
+    await session.commit()
+
+    review = await client.get("/api/v1/categories/review")
+    assert review.status_code == 200
+    item = next(i for i in review.json() if i["id"] == provisional.id)
+    assert item["document_count"] == 1
+    assert item["samples"][0]["filename"] == "bill.pdf"
+    assert any(
+        duplicate["category_id"] == approved.id
+        for duplicate in item["possible_duplicates"]
+    )
+
+    approve = await client.post(
+        f"/api/v1/categories/{provisional.id}/approve", json={}
+    )
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "approved"
+
+    temporary = await CategoryRepository.create(
+        session, name="Temporary", status="provisional", origin="ai"
+    )
+    await session.commit()
+    reject = await client.post(f"/api/v1/categories/{temporary.id}/reject")
+    assert reject.status_code == 204
+    after = await client.get("/api/v1/categories/review")
+    assert all(entry["id"] != temporary.id for entry in after.json())
