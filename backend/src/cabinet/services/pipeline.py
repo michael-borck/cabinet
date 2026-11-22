@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.config import get_settings
-from cabinet.db.models import File, Job, LLMConfig
+from cabinet.db.models import Document, File, Job, LLMConfig
+from cabinet.db.repositories import DocumentRepository
 from cabinet.extractors.base import ExtractionResult
 from cabinet.extractors.registry import get_extractor
 from cabinet.llm.factory import create_provider
@@ -61,7 +62,7 @@ class PipelineService:
         # an expired attribute on an AsyncSession raises MissingGreenlet — so
         # instances must not outlive the batch they belong to.
         query = (
-            select(File.id)
+            select(File.id, File.document_id)
             .where(
                 File.source_id == job.source_id,
                 File.status.in_(("pending", "extracted")),
@@ -69,7 +70,17 @@ class PipelineService:
             .order_by(File.id)
         )
         result = await self._session.execute(query)
-        pending_ids: list[int] = list(result.scalars().all())
+        # One representative instance per document (design §3.1): a document
+        # is extracted/categorised once, and its status mirrors to every
+        # instance. Files without a document yet each stand for themselves.
+        pending_ids: list[int] = []
+        seen_documents: set[int] = set()
+        for file_id, document_id in result.all():
+            if document_id is not None:
+                if document_id in seen_documents:
+                    continue
+                seen_documents.add(document_id)
+            pending_ids.append(file_id)
 
         job.total_files = len(pending_ids)
         job.processed_files = 0
@@ -93,6 +104,19 @@ class PipelineService:
             # Files deleted since the run started simply drop out of the batch.
             batch: list[File] = list(result.scalars().all())
 
+            # Guarantee documents, then drop any representatives that turned
+            # out to sight the same document (legacy unlinked duplicates).
+            for file in batch:
+                await DocumentRepository.ensure_for_file(self._session, file)
+            deduped: list[File] = []
+            batch_documents: set[int] = set()
+            for file in batch:
+                if file.document_id in batch_documents:
+                    continue
+                batch_documents.add(file.document_id)  # type: ignore[arg-type]
+                deduped.append(file)
+            batch = deduped
+
             # -- Extraction ---------------------------------------------------
             extracted_batch: list[File] = []
             extracted_texts: dict[int, str] = {}
@@ -102,13 +126,13 @@ class PipelineService:
                     if extraction is not None:
                         extracted_texts[file.id] = extraction.text
 
-                    file.status = "extracted"
+                    await self._set_status(file, "extracted")
                     extracted_batch.append(file)
                 except Exception as exc:
                     logger.exception(
                         "Extraction failed for file %d (%s)", file.id, file.path
                     )
-                    file.status = "error"
+                    await self._set_status(file, "error")
                     job.error_count += 1
                     _append_error_log(
                         job, f"[extract] file_id={file.id}: {exc}"
@@ -149,7 +173,7 @@ class PipelineService:
                         # is configured -- everything stays "extracted".
                         for file in extracted_batch:
                             if file.id in categorized_ids:
-                                file.status = "categorized"
+                                await self._set_status(file, "categorized")
 
             # -- Update progress -----------------------------------------------
             job.processed_files = min(
@@ -171,6 +195,21 @@ class PipelineService:
             job.error_count,
             " (cancelled)" if cancelled else "",
         )
+
+    async def _set_status(self, file: File, status: str) -> None:
+        """Set pipeline status at document level, mirrored to instances."""
+        if file.document_id is None:
+            file.status = status
+            return
+        doc = await self._session.get(Document, file.document_id)
+        if doc is None:
+            file.status = status
+            return
+        await DocumentRepository.set_status(self._session, doc, status)
+        # set_status skips "missing" instances; the representative is live
+        # by construction, but set it explicitly so the in-memory object
+        # the rest of the loop touches is never stale.
+        file.status = status
 
     async def _job_cancelled(self, job: Job) -> bool:
         """Re-read the job's status so a cancel from another session is seen."""

@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cabinet.db.models import File, Job, Source
+from cabinet.db.models import Document, File, Job, Source
 from cabinet.services.pipeline import PipelineService
 
 
@@ -40,6 +40,48 @@ async def test_no_llm_config_leaves_files_extracted(session: AsyncSession, tmp_p
     await session.refresh(job)
     assert file.status == "extracted"
     assert job.status == "completed"
+
+
+async def test_duplicate_instances_processed_once_per_document(
+    session: AsyncSession, tmp_path
+):
+    """Two instances of one document = one pipeline unit (Phase 1a)."""
+    source = Source(path=str(tmp_path), recursive=True)
+    session.add(source)
+    await session.flush()
+    doc = Document(content_hash="sha256:dup", status="pending")
+    session.add(doc)
+    await session.flush()
+
+    files = []
+    for name in ("a.txt", "copy.txt"):
+        target = tmp_path / name
+        target.write_text("same content")
+        files.append(
+            File(
+                source_id=source.id,
+                document_id=doc.id,
+                path=str(target),
+                filename=name,
+                extension=".txt",
+                size_bytes=12,
+                status="pending",
+            )
+        )
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add_all([*files, job])
+    await session.commit()
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    await session.refresh(job)
+    assert job.total_files == 1  # one document, not two instances
+    statuses = (
+        await session.execute(select(File.status).order_by(File.id))
+    ).scalars().all()
+    assert statuses == ["extracted", "extracted"]  # mirrored to both
+    await session.refresh(doc)
+    assert doc.status == "extracted"
 
 
 async def test_extracted_files_are_retried(session: AsyncSession, tmp_path):

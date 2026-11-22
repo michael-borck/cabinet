@@ -12,18 +12,21 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from cabinet.db.models import (
     Category,
+    Document,
+    DocumentCategory,
     File,
     FileCategory,
     Job,
     LLMConfig,
     Source,
 )
+from cabinet.utils.hashing import prefixed_hash
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -119,6 +122,192 @@ class SourceRepository:
 
 
 # ---------------------------------------------------------------------------
+# DocumentRepository (Phase 1a identity)
+# ---------------------------------------------------------------------------
+
+# Furthest-along pipeline status wins when documents merge.
+_STATUS_RANK = {"pending": 0, "error": 1, "extracted": 2, "categorized": 3}
+
+
+def _furthest_status(a: str, b: str) -> str:
+    return a if _STATUS_RANK.get(a, 0) >= _STATUS_RANK.get(b, 0) else b
+
+
+def effective_categories(file: File) -> list[tuple[Category, float | None, bool]]:
+    """Merged (category, confidence, is_manual) rows for one file instance.
+
+    Document-level assignments first, then per-instance additions for
+    categories the document doesn't already carry. Requires
+    ``file.categories`` and ``file.document.categories`` to be loaded.
+    """
+    merged: dict[int, tuple[Category, float | None, bool]] = {}
+    if file.document is not None:
+        for dc in file.document.categories:
+            merged[dc.category_id] = (dc.category, dc.confidence, dc.is_manual)
+    for fc in file.categories:
+        merged.setdefault(fc.category_id, (fc.category, fc.confidence, fc.is_manual))
+    return list(merged.values())
+
+
+class DocumentRepository:
+    """Identity operations for :class:`Document` rows (design §3)."""
+
+    @staticmethod
+    async def get_by_hash(
+        session: AsyncSession, content_hash: str
+    ) -> Document | None:
+        """Find a document by hash, accepting legacy bare-hex storage."""
+        prefixed = prefixed_hash(content_hash)
+        bare = prefixed.split(":", 1)[1]
+        result = await session.execute(
+            select(Document).where(Document.content_hash.in_((prefixed, bare)))
+        )
+        doc = result.scalar_one_or_none()
+        if doc is not None and doc.content_hash != prefixed:
+            doc.content_hash = prefixed  # normalise legacy storage in passing
+        return doc
+
+    @staticmethod
+    async def ensure_for_file(session: AsyncSession, file: File) -> Document:
+        """Return the file's document, creating/reusing one if needed.
+
+        A stored hash reuses (or creates) the hashed document; no hash yet
+        means a fresh *provisional* document awaits lazy backfill merging.
+        """
+        if file.document_id is not None:
+            doc = await session.get(Document, file.document_id)
+            if doc is not None:
+                return doc
+        if file.content_hash:
+            return await DocumentRepository.attach_hash(
+                session, file, prefixed_hash(file.content_hash)
+            )
+        status = file.status if file.status in _STATUS_RANK else "pending"
+        doc = Document(content_hash=None, status=status)
+        session.add(doc)
+        await session.flush()
+        file.document_id = doc.id
+        return doc
+
+    @staticmethod
+    async def attach_hash(
+        session: AsyncSession, file: File, content_hash: str
+    ) -> Document:
+        """Point *file* at the document for *content_hash* (prefixed form).
+
+        Handles the three shapes from design §3.1/§3.2: adopting the hash
+        into a provisional document, merging a provisional document into an
+        existing hashed one, and repointing after in-place content change.
+        """
+        prefixed = prefixed_hash(content_hash)
+        existing = await DocumentRepository.get_by_hash(session, prefixed)
+        current = (
+            await session.get(Document, file.document_id)
+            if file.document_id is not None
+            else None
+        )
+
+        if existing is not None:
+            if (
+                current is not None
+                and current.id != existing.id
+                and current.content_hash is None
+            ):
+                await DocumentRepository.merge_documents(session, current, existing)
+            # Hashed current with a different hash = content changed at this
+            # path; the old document keeps its other instances.
+            file.document_id = existing.id
+            file.content_hash = prefixed
+            return existing
+
+        if current is not None and current.content_hash is None:
+            current.content_hash = prefixed
+            file.content_hash = prefixed
+            return current
+
+        doc = Document(content_hash=prefixed, status="pending")
+        session.add(doc)
+        await session.flush()
+        file.document_id = doc.id
+        file.content_hash = prefixed
+        return doc
+
+    @staticmethod
+    async def merge_documents(
+        session: AsyncSession, source: Document, target: Document
+    ) -> Document:
+        """Fold *source* into *target*: instances, categories, status.
+
+        Only ever called on exact hash equality (provisional documents
+        discovered to be duplicates); fuzzy similarity never merges.
+        """
+        if source.id == target.id:
+            return target
+
+        instances = (
+            await session.execute(
+                select(File).where(File.document_id == source.id)
+            )
+        ).scalars().all()
+        for inst in instances:
+            inst.document_id = target.id
+            if target.content_hash:
+                inst.content_hash = target.content_hash
+
+        target_cats = {
+            dc.category_id: dc
+            for dc in (
+                await session.execute(
+                    select(DocumentCategory).where(
+                        DocumentCategory.document_id == target.id
+                    )
+                )
+            ).scalars().all()
+        }
+        source_cats = (
+            await session.execute(
+                select(DocumentCategory).where(
+                    DocumentCategory.document_id == source.id
+                )
+            )
+        ).scalars().all()
+        for dc in source_cats:
+            keep = target_cats.get(dc.category_id)
+            if keep is None:
+                dc.document_id = target.id
+            else:
+                # Manual beats AI; keep the higher confidence.
+                keep.is_manual = keep.is_manual or dc.is_manual
+                confs = [c for c in (keep.confidence, dc.confidence) if c is not None]
+                keep.confidence = max(confs) if confs else None
+                await session.delete(dc)
+
+        target.status = _furthest_status(target.status, source.status)
+        await session.flush()
+        await session.delete(source)
+        await session.flush()
+        return target
+
+    @staticmethod
+    async def set_status(
+        session: AsyncSession, document: Document, status: str
+    ) -> None:
+        """Set a document's status and mirror it to live instances.
+
+        ``missing`` instances keep their instance-only state.
+        """
+        document.status = status
+        instances = (
+            await session.execute(
+                select(File).where(File.document_id == document.id)
+            )
+        ).scalars().all()
+        for inst in instances:
+            if inst.status != "missing":
+                inst.status = status
+
+
+# ---------------------------------------------------------------------------
 # FileRepository
 # ---------------------------------------------------------------------------
 
@@ -160,15 +349,32 @@ class FileRepository:
             ``(rows, total_count)``
         """
         base = select(File).options(
-            selectinload(File.categories).joinedload(FileCategory.category)
+            selectinload(File.categories).joinedload(FileCategory.category),
+            selectinload(File.document)
+            .selectinload(Document.categories)
+            .joinedload(DocumentCategory.category),
         )
         count_base = select(func.count(File.id))
 
         if category_id is not None:
-            base = base.join(FileCategory).where(FileCategory.category_id == category_id)
-            count_base = count_base.join(FileCategory).where(
-                FileCategory.category_id == category_id
+            # Effective membership: document-level assignment or a
+            # per-instance addition (EXISTS avoids duplicate rows).
+            in_category = or_(
+                select(DocumentCategory.document_id)
+                .where(
+                    DocumentCategory.category_id == category_id,
+                    DocumentCategory.document_id == File.document_id,
+                )
+                .exists(),
+                select(FileCategory.file_id)
+                .where(
+                    FileCategory.category_id == category_id,
+                    FileCategory.file_id == File.id,
+                )
+                .exists(),
             )
+            base = base.where(in_category)
+            count_base = count_base.where(in_category)
         if status is not None:
             base = base.where(File.status == status)
             count_base = count_base.where(File.status == status)
@@ -201,7 +407,12 @@ class FileRepository:
         stmt = (
             select(File)
             .where(File.id == file_id)
-            .options(selectinload(File.categories).joinedload(FileCategory.category))
+            .options(
+                selectinload(File.categories).joinedload(FileCategory.category),
+                selectinload(File.document)
+                .selectinload(Document.categories)
+                .joinedload(DocumentCategory.category),
+            )
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
@@ -314,24 +525,39 @@ class CategoryRepository:
 
     @staticmethod
     async def get_flat_with_counts(session: AsyncSession) -> Sequence[dict[str, Any]]:
-        """Return all categories with a ``file_count`` annotation."""
-        stmt = (
-            select(
-                Category,
-                func.count(FileCategory.file_id).label("file_count"),
+        """Return all categories with a ``file_count`` annotation.
+
+        Counts *documents* (design §3.1): duplicates of one document count
+        once. A per-instance addition counts its file's document, or the
+        file itself (negative key) while it has no document yet.
+        """
+        cats = (
+            await session.execute(select(Category).order_by(Category.name))
+        ).scalars().all()
+
+        keys: dict[int, set[int]] = {cat.id: set() for cat in cats}
+        doc_rows = (
+            await session.execute(
+                select(DocumentCategory.category_id, DocumentCategory.document_id)
             )
-            .outerjoin(FileCategory, FileCategory.category_id == Category.id)
-            .group_by(Category.id)
-            .order_by(Category.name)
-        )
-        result = await session.execute(stmt)
-        rows = result.all()
+        ).all()
+        for category_id, document_id in doc_rows:
+            if category_id in keys:
+                keys[category_id].add(document_id)
+        inst_rows = (
+            await session.execute(
+                select(FileCategory.category_id, File.document_id, File.id)
+                .join(File, File.id == FileCategory.file_id)
+            )
+        ).all()
+        for category_id, document_id, file_id in inst_rows:
+            if category_id in keys:
+                keys[category_id].add(
+                    document_id if document_id is not None else -file_id
+                )
+
         return [
-            {
-                "category": row[0],
-                "file_count": row[1],
-            }
-            for row in rows
+            {"category": cat, "file_count": len(keys[cat.id])} for cat in cats
         ]
 
     @staticmethod
@@ -483,16 +709,22 @@ class CategoryRepository:
         limit: int = 50,
     ) -> tuple[Sequence[File], int]:
         """Return paginated files belonging to *category_id*."""
-        base = (
-            select(File)
-            .join(FileCategory)
-            .where(FileCategory.category_id == category_id)
+        in_category = or_(
+            select(DocumentCategory.document_id)
+            .where(
+                DocumentCategory.category_id == category_id,
+                DocumentCategory.document_id == File.document_id,
+            )
+            .exists(),
+            select(FileCategory.file_id)
+            .where(
+                FileCategory.category_id == category_id,
+                FileCategory.file_id == File.id,
+            )
+            .exists(),
         )
-        count_stmt = (
-            select(func.count(File.id))
-            .join(FileCategory)
-            .where(FileCategory.category_id == category_id)
-        )
+        base = select(File).where(in_category)
+        count_stmt = select(func.count(File.id)).where(in_category)
 
         total_result = await session.execute(count_stmt)
         total: int = total_result.scalar_one()

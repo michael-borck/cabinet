@@ -3,7 +3,14 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cabinet.db.models import File, Job, Source
+from cabinet.db.models import (
+    Category,
+    Document,
+    DocumentCategory,
+    File,
+    Job,
+    Source,
+)
 from cabinet.services.scanner import ScannerService
 
 
@@ -79,6 +86,177 @@ async def test_changed_file_requeued(session: AsyncSession, tmp_path):
 
     await session.refresh(file)
     assert file.status == "pending"
+
+
+async def test_rename_preserves_identity_and_status(session: AsyncSession, tmp_path):
+    """An external rename is a move, not a delete + new file (Phase 1a).
+
+    The categorised file must keep its row (and therefore its category
+    assignments) and must not be re-queued for extraction/LLM work.
+    """
+    target = tmp_path / "a.txt"
+    target.write_text("hello")
+    source = await _make_source(session, str(tmp_path))
+
+    scanner = ScannerService(session)
+    await scanner.scan_source(source.id)
+
+    result = await session.execute(select(File))
+    file = result.scalar_one()
+    original_id = file.id
+    file.status = "categorized"
+    await session.flush()
+
+    target.rename(tmp_path / "renamed.txt")
+    job = await scanner.scan_source(source.id)
+
+    result = await session.execute(select(File))
+    files = result.scalars().all()
+    assert len(files) == 1
+    moved = files[0]
+    assert moved.id == original_id
+    assert moved.filename == "renamed.txt"
+    assert moved.status == "categorized"
+    assert job.processed_files == 1  # the move itself, nothing re-queued
+
+
+async def _mark_categorized(session: AsyncSession, file: File) -> Document:
+    """Simulate a completed pipeline run for scanner tests."""
+    doc = await session.get(Document, file.document_id)
+    assert doc is not None
+    doc.status = "categorized"
+    file.status = "categorized"
+    await session.flush()
+    return doc
+
+
+async def test_move_detected_by_hash_without_inode(session: AsyncSession, tmp_path):
+    """FAT-style fallback: no usable inode, the hash still spots the move."""
+    target = tmp_path / "a.txt"
+    target.write_text("hello")
+    source = await _make_source(session, str(tmp_path))
+    scanner = ScannerService(session)
+    await scanner.scan_source(source.id)
+
+    file = (await session.execute(select(File))).scalar_one()
+    await _mark_categorized(session, file)
+    original_id = file.id
+    file.inode = None  # simulate a filesystem without usable inodes
+    file.device_id = None
+    await session.flush()
+
+    subdir = tmp_path / "sub"
+    subdir.mkdir()
+    target.rename(subdir / "moved.txt")
+    job = await scanner.scan_source(source.id)
+
+    files = (await session.execute(select(File))).scalars().all()
+    assert len(files) == 1
+    assert files[0].id == original_id
+    assert files[0].filename == "moved.txt"
+    assert files[0].status == "categorized"
+    assert job.moved_count == 1
+
+
+async def test_copy_is_second_instance_of_same_document(
+    session: AsyncSession, tmp_path
+):
+    """Identical content at a new path attaches to the same document."""
+    (tmp_path / "a.txt").write_text("shared content")
+    source = await _make_source(session, str(tmp_path))
+    scanner = ScannerService(session)
+    await scanner.scan_source(source.id)
+
+    file = (await session.execute(select(File))).scalar_one()
+    doc = await _mark_categorized(session, file)
+
+    (tmp_path / "copy.txt").write_text("shared content")
+    await scanner.scan_source(source.id)
+
+    files = (await session.execute(select(File).order_by(File.filename))).scalars().all()
+    assert [f.filename for f in files] == ["a.txt", "copy.txt"]
+    assert {f.document_id for f in files} == {doc.id}
+    # The copy needed no pipeline work: it sights a categorized document.
+    assert {f.status for f in files} == {"categorized"}
+    docs = (await session.execute(select(Document))).scalars().all()
+    assert len(docs) == 1
+
+
+async def test_content_replaced_at_path_repoints_document(
+    session: AsyncSession, tmp_path
+):
+    """New content at an old path is a new document, re-queued once."""
+    import os
+    import time
+
+    target = tmp_path / "a.txt"
+    target.write_text("v1")
+    source = await _make_source(session, str(tmp_path))
+    scanner = ScannerService(session)
+    await scanner.scan_source(source.id)
+
+    file = (await session.execute(select(File))).scalar_one()
+    old_doc = await _mark_categorized(session, file)
+
+    target.write_text("completely different v2")
+    future = time.time() + 10
+    os.utime(target, (future, future))
+    await scanner.scan_source(source.id)
+
+    await session.refresh(file)
+    assert file.document_id != old_doc.id
+    assert file.status == "pending"
+    new_doc = await session.get(Document, file.document_id)
+    assert new_doc is not None and new_doc.status == "pending"
+    assert new_doc.content_hash is not None
+    assert new_doc.content_hash != old_doc.content_hash
+
+
+async def test_provisional_documents_merge_on_hash_backfill(
+    session: AsyncSession, tmp_path
+):
+    """Pre-1a rows (provisional documents) merge when hashing catches up."""
+    (tmp_path / "a.txt").write_text("same bytes")
+    (tmp_path / "b.txt").write_text("same bytes")
+    source = await _make_source(session, str(tmp_path))
+
+    docs = [Document(content_hash=None, status="pending") for _ in range(2)]
+    session.add_all(docs)
+    await session.flush()
+    files = [
+        File(
+            source_id=source.id,
+            document_id=doc.id,
+            path=str(tmp_path / name),
+            filename=name,
+            extension=".txt",
+            size_bytes=10,
+            status="pending",
+        )
+        for doc, name in zip(docs, ("a.txt", "b.txt"), strict=True)
+    ]
+    category = Category(name="Finance", slug="finance")
+    session.add_all([*files, category])
+    await session.flush()
+    session.add(
+        DocumentCategory(
+            document_id=docs[1].id, category_id=category.id, is_manual=True
+        )
+    )
+    await session.flush()
+
+    await ScannerService(session).scan_source(source.id)
+
+    remaining = (await session.execute(select(Document))).scalars().all()
+    assert len(remaining) == 1
+    assert remaining[0].content_hash is not None
+    merged_files = (await session.execute(select(File))).scalars().all()
+    assert {f.document_id for f in merged_files} == {remaining[0].id}
+    # The manual assignment survived the merge at document level.
+    assignments = (
+        await session.execute(select(DocumentCategory))
+    ).scalars().all()
+    assert [(a.category_id, a.is_manual) for a in assignments] == [(category.id, True)]
 
 
 async def test_default_exclusions_skipped(session: AsyncSession, tmp_path):

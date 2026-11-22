@@ -13,8 +13,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cabinet.db.models import File, Job, Source
-from cabinet.utils.hashing import compute_file_hash
+from cabinet.db.models import Document, File, Job, Source
+from cabinet.db.repositories import DocumentRepository
+from cabinet.utils.hashing import compute_file_hash, hashes_equal, prefixed_hash
 
 logger = logging.getLogger(__name__)
 
@@ -148,10 +149,14 @@ class ScannerService:
             job.total_files = len(found_files)
 
             # Reconcile -------------------------------------------------------
-            new_count, missing_count, changed_count = await self._reconcile(
-                source_id, found_files, mode
+            counts = await self._reconcile(source_id, found_files, mode)
+            new_count = counts["new"]
+            missing_count = counts["missing"]
+            changed_count = counts["changed"]
+            job.moved_count = counts["moved"]
+            job.processed_files = (
+                new_count + missing_count + changed_count + counts["moved"]
             )
-            job.processed_files = new_count + missing_count + changed_count
             job.status = "completed"
 
             # Update source's last_scanned_at ----------------------------------
@@ -159,12 +164,13 @@ class ScannerService:
 
             logger.info(
                 "Scan completed for source %d (%s): "
-                "new=%d, missing=%d, changed=%d, total_found=%d",
+                "new=%d, missing=%d, changed=%d, moved=%d, total_found=%d",
                 source_id,
                 mode,
                 new_count,
                 missing_count,
                 changed_count,
+                counts["moved"],
                 len(found_files),
             )
         except Exception:
@@ -248,37 +254,153 @@ class ScannerService:
         source_id: int,
         found_files: list[dict[str, Any]],
         mode: str,
-    ) -> tuple[int, int, int]:
+    ) -> dict[str, int]:
         """Compare filesystem state with the database and apply changes.
 
+        Identity resolution follows design §3.2: exact path, then
+        corroborated inode (move), then content hash (attach to the
+        existing document as a move or a copy), else genuinely new.
+
         Returns:
-            ``(new_count, missing_count, changed_count)``
+            Counts dict with ``new``, ``missing``, ``changed``, ``moved``.
         """
-        # Load existing DB files for this source ------------------------------
         result = await self._session.execute(
             select(File).where(File.source_id == source_id)
         )
         existing_files: list[File] = list(result.scalars().all())
         existing_by_path: dict[str, File] = {f.path: f for f in existing_files}
 
-        found_paths: set[str] = {f["path"] for f in found_files}
         found_by_path: dict[str, dict[str, Any]] = {f["path"]: f for f in found_files}
+        found_paths = set(found_by_path)
+        existing_paths = set(existing_by_path)
 
-        new_count = 0
-        missing_count = 0
-        changed_count = 0
+        counts = {"new": 0, "missing": 0, "changed": 0, "moved": 0}
+        # Existing instance ids matched to something found on disk; the
+        # remainder become "missing" in pass C.
+        live_ids: set[int] = set()
 
-        # --- Full-reindex shortcut: reset all existing files to pending ------
+        # --- Full reindex: re-queue everything present (per instance, as
+        # before) and make sure every file has a document for the pipeline.
         if mode == "full_reindex":
             for db_file in existing_files:
                 if db_file.path in found_paths:
+                    await DocumentRepository.ensure_for_file(self._session, db_file)
                     db_file.status = "pending"
-                    changed_count += 1
+                    doc = await self._session.get(Document, db_file.document_id)
+                    if doc is not None:
+                        doc.status = "pending"
+                    counts["changed"] += 1
 
-        # --- New files (on filesystem but not in DB) -------------------------
-        existing_paths = set(existing_by_path.keys())
-        for path in found_paths - existing_paths:
+        # --- Pass A: exact path matches -----------------------------------
+        for path in sorted(existing_paths & found_paths):
+            db_file = existing_by_path[path]
             info = found_by_path[path]
+            live_ids.add(db_file.id)
+            # Always refresh inode/device: cheap, and it arms zero-read
+            # rename detection for legacy rows that predate the columns.
+            db_file.device_id = info.get("device_id")
+            db_file.inode = info.get("inode")
+            if mode == "full_reindex":
+                continue
+
+            was_missing = db_file.status == "missing"
+            fs_mtime = info["file_modified_at"]
+            mtime_changed = db_file.file_modified_at is None or (
+                fs_mtime is not None and fs_mtime != db_file.file_modified_at
+            )
+
+            if not mtime_changed and db_file.content_hash is not None:
+                # Fast path (unchanged): just guarantee document linkage.
+                await DocumentRepository.ensure_for_file(self._session, db_file)
+                if was_missing:
+                    db_file.status = await self._document_status(db_file)
+                    counts["changed"] += 1
+                continue
+
+            if not mtime_changed and db_file.content_hash is None:
+                # Lazy hash backfill for pre-1a rows. Attaching the hash may
+                # merge this file's provisional document into a known one;
+                # status is left alone unless it was missing.
+                digest = await self._hash_file(path)
+                if digest is not None:
+                    await DocumentRepository.attach_hash(
+                        self._session, db_file, digest
+                    )
+                if was_missing:
+                    db_file.status = await self._document_status(db_file)
+                    counts["changed"] += 1
+                continue
+
+            # Mtime moved: only the hash can say whether content changed.
+            digest = await self._hash_file(path)
+            if digest is None:
+                continue
+            if hashes_equal(digest, db_file.content_hash):
+                db_file.file_modified_at = fs_mtime
+                await DocumentRepository.ensure_for_file(self._session, db_file)
+                if was_missing:
+                    db_file.status = await self._document_status(db_file)
+                    counts["changed"] += 1
+                continue
+
+            # Content changed at this path: the instance now sights the
+            # (possibly already-known) document for the new hash.
+            doc = await DocumentRepository.attach_hash(self._session, db_file, digest)
+            db_file.size_bytes = info["size_bytes"]
+            db_file.file_modified_at = fs_mtime
+            # A document that is already categorized needs no new work;
+            # anything else (re-)enters the pipeline at document level.
+            if doc.status != "categorized":
+                await DocumentRepository.set_status(self._session, doc, "pending")
+            db_file.status = doc.status
+            counts["changed"] += 1
+
+        # --- Pass B: new paths — move (inode), attach (hash), or new -----
+        unmatched = [f for f in existing_files if f.id not in live_ids]
+        for path in sorted(found_paths - existing_paths):
+            info = found_by_path[path]
+
+            moved = self._inode_move_candidate(unmatched, live_ids, info)
+            if moved is not None:
+                self._apply_sighting(moved, info)
+                if moved.status == "missing":
+                    moved.status = await self._document_status(moved)
+                live_ids.add(moved.id)
+                counts["moved"] += 1
+                continue
+
+            digest = await self._hash_file(path)
+            doc = (
+                await DocumentRepository.get_by_hash(self._session, digest)
+                if digest is not None
+                else None
+            )
+
+            # Move sub-case: exactly one unmatched instance already sights
+            # this content (by document or by a legacy stored hash).
+            move_candidates = [
+                f
+                for f in unmatched
+                if f.id not in live_ids
+                and digest is not None
+                and (
+                    (doc is not None and f.document_id == doc.id)
+                    or hashes_equal(digest, f.content_hash)
+                )
+            ]
+            if len(move_candidates) == 1:
+                moved = move_candidates[0]
+                self._apply_sighting(moved, info)
+                doc = await DocumentRepository.attach_hash(
+                    self._session, moved, digest  # type: ignore[arg-type]
+                )
+                moved.status = doc.status
+                live_ids.add(moved.id)
+                counts["moved"] += 1
+                continue
+
+            # Copy of known content, or genuinely new content: a new
+            # instance either way; only new content needs pipeline work.
             new_file = File(
                 source_id=source_id,
                 path=info["path"],
@@ -286,49 +408,88 @@ class ScannerService:
                 extension=info["extension"],
                 size_bytes=info["size_bytes"],
                 file_modified_at=info["file_modified_at"],
+                device_id=info.get("device_id"),
+                inode=info.get("inode"),
                 status="pending",
             )
             self._session.add(new_file)
-            new_count += 1
+            await self._session.flush()
+            if digest is not None:
+                doc = await DocumentRepository.attach_hash(
+                    self._session, new_file, digest
+                )
+                new_file.status = doc.status  # categorized copies stay done
+            else:
+                await DocumentRepository.ensure_for_file(self._session, new_file)
+            live_ids.add(new_file.id)
+            counts["new"] += 1
 
-        # --- Missing files (in DB but not on filesystem) ---------------------
-        for path in existing_paths - found_paths:
-            db_file = existing_by_path[path]
-            if db_file.status != "missing":
+        # --- Pass C: whatever wasn't matched is missing (tombstone) -------
+        for db_file in existing_files:
+            if db_file.id not in live_ids and db_file.status != "missing":
                 db_file.status = "missing"
-                missing_count += 1
-
-        # --- Existing files: check for modifications -------------------------
-        if mode != "full_reindex":
-            for path in existing_paths & found_paths:
-                db_file = existing_by_path[path]
-                fs_info = found_by_path[path]
-
-                # Compare modification time
-                fs_mtime = fs_info["file_modified_at"]
-                if db_file.file_modified_at is None or (
-                    fs_mtime is not None
-                    and fs_mtime != db_file.file_modified_at
-                ):
-                    # Mtime differs -- check content hash to be sure
-                    new_hash = await compute_file_hash(path)
-                    if new_hash != db_file.content_hash:
-                        db_file.status = "pending"
-                        db_file.content_hash = new_hash
-                        db_file.size_bytes = fs_info["size_bytes"]
-                        db_file.file_modified_at = fs_mtime
-                        changed_count += 1
-                    else:
-                        # Hash matches -- just update mtime
-                        db_file.file_modified_at = fs_mtime
-
-                # Ensure a previously-missing file that reappears is re-queued
-                if db_file.status == "missing":
-                    db_file.status = "pending"
-                    changed_count += 1
+                counts["missing"] += 1
 
         await self._session.flush()
-        return new_count, missing_count, changed_count
+        return counts
+
+    # ------------------------------------------------------------------
+    # Reconciliation helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _inode_move_candidate(
+        unmatched: list[File], live_ids: set[int], info: dict[str, Any]
+    ) -> File | None:
+        """Find a rename/move by corroborated inode (design §3.3).
+
+        Inode alone is never trusted: device must match, the inode must be
+        non-zero, and size + mtime must equal the recorded sighting. A
+        filesystem with unstable/zero inodes (FAT/exFAT) simply yields no
+        candidate and falls through to hashing.
+        """
+        inode = info.get("inode")
+        device_id = info.get("device_id")
+        if not inode or device_id is None:
+            return None
+        matches = [
+            f
+            for f in unmatched
+            if f.id not in live_ids
+            and f.inode == inode
+            and f.device_id == device_id
+            and f.size_bytes == info["size_bytes"]
+            and f.file_modified_at is not None
+            and f.file_modified_at == info["file_modified_at"]
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    @staticmethod
+    def _apply_sighting(file: File, info: dict[str, Any]) -> None:
+        """Record a new location for an existing instance."""
+        file.path = info["path"]
+        file.filename = info["filename"]
+        file.extension = info["extension"]
+        file.size_bytes = info["size_bytes"]
+        file.file_modified_at = info["file_modified_at"]
+        file.device_id = info.get("device_id")
+        file.inode = info.get("inode")
+
+    async def _document_status(self, file: File) -> str:
+        """The status a restored instance should mirror."""
+        if file.document_id is None:
+            return "pending"
+        doc = await self._session.get(Document, file.document_id)
+        return doc.status if doc is not None else "pending"
+
+    @staticmethod
+    async def _hash_file(path: str) -> str | None:
+        """Prefixed content hash, or None when the file can't be read."""
+        try:
+            return prefixed_hash(await compute_file_hash(path))
+        except OSError:
+            logger.warning("Could not hash %s; treating as unhashed", path)
+            return None
 
 
 # --------------------------------------------------------------------------
@@ -348,6 +509,10 @@ def _file_info(full_path: str, filename: str) -> dict[str, Any] | None:
         "filename": filename,
         "extension": ext.lower() if ext else None,
         "size_bytes": stat.st_size,
+        # Identity hints for rename detection; 0/unstable on some
+        # filesystems, which the reconcile corroboration handles (§3.3).
+        "device_id": stat.st_dev,
+        "inode": stat.st_ino or None,
         # Naive UTC: the DateTime columns are timezone-less, and an aware
         # value never compares equal to the naive one read back from the DB,
         # which made every sync rehash every file.

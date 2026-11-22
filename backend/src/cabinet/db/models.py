@@ -47,7 +47,59 @@ class Source(Base):
         return f"<Source id={self.id} path={self.path!r}>"
 
 
+class Document(Base):
+    """A unit of content, identified by its hash (Phase 1a).
+
+    Category assignments and (from Phase 2) derived facts live here, so a
+    document is extracted and categorised once however many ``File``
+    instances (locations) it has. ``content_hash`` is NULL while a document
+    is *provisional* (created for a not-yet-hashed file); provisional
+    documents merge when backfill hashing reveals identical content.
+    SQLite unique indexes treat NULLs as distinct, so many provisional
+    documents can coexist.
+    """
+
+    __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_content_hash", "content_hash", unique=True),
+        Index("ix_documents_status", "status"),
+        Index("ix_documents_cluster_id", "cluster_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Stored algorithm-prefixed ("sha256:<hex>"); legacy bare hex on
+    # ``files.content_hash`` is treated as sha256 when documents are created.
+    content_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    # Near-duplicate/version grouping (design §3.4); unused until 2b/3.
+    cluster_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    instances: Mapped[list[File]] = relationship(
+        "File", back_populates="document"
+    )
+    categories: Mapped[list[DocumentCategory]] = relationship(
+        "DocumentCategory", back_populates="document", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<Document id={self.id} hash={self.content_hash!r}>"
+
+
 class File(Base):
+    """One location (instance) of a :class:`Document` on disk.
+
+    ``status`` is retained as a per-instance mirror of the document's
+    pipeline status plus the instance-only ``missing`` state, so existing
+    API consumers keep working; the scanner/pipeline keep the two in sync.
+    ``content_hash`` mirrors the document hash for the same reason.
+    """
+
     __tablename__ = "files"
     __table_args__ = (
         # Unique per source, not globally: overlapping sources may legitimately
@@ -57,12 +109,22 @@ class File(Base):
         Index("ix_files_status", "status"),
         Index("ix_files_extension", "extension"),
         Index("ix_files_content_hash", "content_hash"),
+        Index("ix_files_document_id", "document_id"),
+        # Rename lookup within a source (design §3.2 step 2).
+        Index("ix_files_source_device_inode", "source_id", "device_id", "inode"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("sources.id", ondelete="CASCADE"), nullable=False
     )
+    document_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
+    # st_dev / st_ino at last sighting, for zero-read rename detection.
+    # NULL (or 0) when the filesystem doesn't provide trustworthy values.
+    device_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inode: Mapped[int | None] = mapped_column(Integer, nullable=True)
     path: Mapped[str] = mapped_column(String, nullable=False)
     filename: Mapped[str] = mapped_column(String, nullable=False)
     extension: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -79,6 +141,12 @@ class File(Base):
     )
 
     source: Mapped[Source] = relationship("Source", back_populates="files")
+    document: Mapped[Document | None] = relationship(
+        "Document", back_populates="instances"
+    )
+    # Per-instance manual category additions only (design §3.1); the
+    # document-level assignments live on DocumentCategory. Rows written
+    # before Phase 1a (incl. AI ones) are moved by the engine migration.
     categories: Mapped[list[FileCategory]] = relationship(
         "FileCategory", back_populates="file", cascade="all, delete-orphan"
     )
@@ -119,6 +187,9 @@ class Category(Base):
     file_categories: Mapped[list[FileCategory]] = relationship(
         "FileCategory", back_populates="category", cascade="all, delete-orphan"
     )
+    document_categories: Mapped[list[DocumentCategory]] = relationship(
+        "DocumentCategory", back_populates="category", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Category id={self.id} slug={self.slug!r}>"
@@ -149,6 +220,38 @@ class FileCategory(Base):
         return f"<FileCategory file_id={self.file_id} category_id={self.category_id}>"
 
 
+class DocumentCategory(Base):
+    """Category assignment at document level — shared by all instances."""
+
+    __tablename__ = "document_categories"
+    __table_args__ = (
+        Index("ix_document_categories_category_id", "category_id"),
+    )
+
+    document_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("categories.id", ondelete="CASCADE"), primary_key=True
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_manual: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+    document: Mapped[Document] = relationship("Document", back_populates="categories")
+    category: Mapped[Category] = relationship(
+        "Category", back_populates="document_categories"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<DocumentCategory document_id={self.document_id} "
+            f"category_id={self.category_id}>"
+        )
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
@@ -160,6 +263,9 @@ class Job(Base):
     )
     total_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     processed_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Files recognised as moves/renames (Phase 1a) — work *avoided*, shown
+    # to the user so a restructure reads as "moved", not "reprocessed".
+    moved_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_log: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -8,7 +8,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cabinet.db.models import Category, File, FileCategory
+from cabinet.db.models import Category, DocumentCategory, File, FileCategory
+from cabinet.db.repositories import DocumentRepository
 from cabinet.llm.base import LLMProvider
 from cabinet.utils.text import make_slug, truncate_text
 
@@ -53,6 +54,11 @@ class CategorizationService:
 
         if extracted_texts is None:
             extracted_texts = {}
+
+        # Assignments are written at document level (design §3.1); make
+        # sure every file has a document before resolving categories.
+        for file in files:
+            await DocumentRepository.ensure_for_file(self._session, file)
 
         # Fetch the current category tree for context -------------------------
         result = await self._session.execute(select(Category).order_by(Category.id))
@@ -223,36 +229,64 @@ class CategorizationService:
                 if not resolved:
                     continue
 
-                # Remove existing AI-suggested assignments for this file -------
+                if file.document_id is None:
+                    continue
+                document_id = file.document_id
+
+                # Remove existing AI assignments for this document. Manual
+                # document assignments and per-instance manual additions
+                # (FileCategory) are preserved.
                 result = await self._session.execute(
+                    select(DocumentCategory).where(
+                        DocumentCategory.document_id == document_id,
+                        DocumentCategory.is_manual == False,  # noqa: E712
+                    )
+                )
+                for old in result.scalars().all():
+                    await self._session.delete(old)
+                # Legacy pre-1a AI rows on this instance (unmigrated test /
+                # direct-construction paths) go too, so they can't linger
+                # as phantom assignments next to the document-level ones.
+                legacy = await self._session.execute(
                     select(FileCategory).where(
                         FileCategory.file_id == file.id,
                         FileCategory.is_manual == False,  # noqa: E712
                     )
                 )
-                for old in result.scalars().all():
-                    await self._session.delete(old)
+                for legacy_old in legacy.scalars().all():
+                    await self._session.delete(legacy_old)
+                await self._session.flush()
 
                 # Create new assignments ---------------------------------------
                 for category, confidence in resolved:
-                    # Skip pairs that already exist (e.g. a manual assignment,
-                    # or the LLM naming the same category twice).
+                    # Skip pairs that already exist at either level (e.g. a
+                    # manual assignment, or the LLM naming a category twice).
                     existing = await self._session.execute(
+                        select(DocumentCategory).where(
+                            DocumentCategory.document_id == document_id,
+                            DocumentCategory.category_id == category.id,
+                        )
+                    )
+                    if existing.scalar_one_or_none() is not None:
+                        continue
+                    inst_existing = await self._session.execute(
                         select(FileCategory).where(
                             FileCategory.file_id == file.id,
                             FileCategory.category_id == category.id,
                         )
                     )
-                    if existing.scalar_one_or_none() is not None:
+                    if inst_existing.scalar_one_or_none() is not None:
                         continue
 
-                    fc = FileCategory(
-                        file_id=file.id,
-                        category_id=category.id,
-                        confidence=confidence,
-                        is_manual=False,
+                    self._session.add(
+                        DocumentCategory(
+                            document_id=document_id,
+                            category_id=category.id,
+                            confidence=confidence,
+                            is_manual=False,
+                        )
                     )
-                    self._session.add(fc)
+                    await self._session.flush()
 
                 assigned.add(file.id)
             except Exception:

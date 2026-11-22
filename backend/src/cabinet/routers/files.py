@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.db.engine import get_session
-from cabinet.db.models import FileCategory
-from cabinet.db.repositories import CategoryRepository, FileRepository
+from cabinet.db.models import DocumentCategory
+from cabinet.db.repositories import (
+    CategoryRepository,
+    DocumentRepository,
+    FileRepository,
+    effective_categories,
+)
 from cabinet.schemas import (
     CategoryBrief,
     FileCategoryAssign,
@@ -21,24 +27,24 @@ router = APIRouter(prefix="/files", tags=["files"])
 def _build_file_response(file) -> FileResponse:
     """Convert a File ORM instance into a FileResponse schema.
 
-    Builds the ``categories`` list from the eager-loaded
-    ``file.categories`` relationship (which points to FileCategory rows).
+    ``categories`` is the merged effective set: document-level assignments
+    plus any per-instance additions (see ``effective_categories``).
     """
-    cats: list[CategoryBrief] = []
-    for fc in file.categories:
-        cats.append(
-            CategoryBrief(
-                id=fc.category.id,
-                name=fc.category.name,
-                slug=fc.category.slug,
-                color=fc.category.color,
-                confidence=fc.confidence,
-            )
+    cats: list[CategoryBrief] = [
+        CategoryBrief(
+            id=category.id,
+            name=category.name,
+            slug=category.slug,
+            color=category.color,
+            confidence=confidence,
         )
+        for category, confidence, _is_manual in effective_categories(file)
+    ]
 
     return FileResponse(
         id=file.id,
         source_id=file.source_id,
+        document_id=file.document_id,
         path=file.path,
         filename=file.filename,
         extension=file.extension,
@@ -129,19 +135,32 @@ async def assign_categories(
                 detail=f"Category {cat_id} not found",
             )
 
-    existing = {fc.category_id: fc for fc in file.categories}
+    # Manual assignment is at document level (design §3.1): every instance
+    # of this document shares it. Per-instance additions remain possible
+    # via FileCategory rows created elsewhere, but the API's "assign to
+    # this file" means "file this document".
+    doc = await DocumentRepository.ensure_for_file(session, file)
+    doc_rows = (
+        await session.execute(
+            select(DocumentCategory).where(DocumentCategory.document_id == doc.id)
+        )
+    ).scalars().all()
+    existing_doc = {dc.category_id: dc for dc in doc_rows}
+    existing_inst = {fc.category_id: fc for fc in file.categories}
 
     for cat_id in body.category_ids:
-        fc = existing.get(cat_id)
-        if fc is not None:
+        dc = existing_doc.get(cat_id)
+        if dc is not None:
             # Re-asserting an AI assignment pins it: only is_manual rows
             # survive recategorization, so a plain skip would let the next
             # run silently drop a category the user explicitly confirmed.
-            fc.is_manual = True
+            dc.is_manual = True
+        elif cat_id in existing_inst:
+            existing_inst[cat_id].is_manual = True
         else:
             session.add(
-                FileCategory(
-                    file_id=file_id,
+                DocumentCategory(
+                    document_id=doc.id,
                     category_id=cat_id,
                     is_manual=True,
                 )
@@ -149,9 +168,10 @@ async def assign_categories(
 
     await session.flush()
 
-    # The assignments were inserted as raw FK rows, so the already-loaded
-    # relationship collection is stale; expire it so the re-fetch reloads it.
-    session.expire(file, ["categories"])
+    # Relationship collections are stale after raw FK inserts; expire them
+    # so the re-fetch reloads the merged effective set.
+    session.expire(file, ["categories", "document"])
+    session.expire(doc, ["categories"])
     file = await FileRepository.get_by_id(session, file_id)
     return _build_file_response(file)
 
@@ -173,17 +193,23 @@ async def remove_category(
             detail=f"File {file_id} not found",
         )
 
-    target_fc = None
-    for fc in file.categories:
+    # Remove at whichever level(s) the assignment lives, so the category
+    # actually disappears from the effective set.
+    removed = False
+    if file.document is not None:
+        for dc in list(file.document.categories):
+            if dc.category_id == category_id:
+                await session.delete(dc)
+                removed = True
+    for fc in list(file.categories):
         if fc.category_id == category_id:
-            target_fc = fc
-            break
+            await session.delete(fc)
+            removed = True
 
-    if target_fc is None:
+    if not removed:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File {file_id} does not have category {category_id}",
         )
 
-    await session.delete(target_fc)
     await session.flush()

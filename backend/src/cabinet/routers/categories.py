@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.db.engine import get_session
-from cabinet.db.repositories import CategoryRepository, FileRepository
+from cabinet.db.repositories import (
+    CategoryRepository,
+    FileRepository,
+    effective_categories,
+)
 from cabinet.schemas import (
     CategoryBrief,
     CategoryCreate,
@@ -174,21 +178,21 @@ async def get_category_files(
     for f in files:
         detailed = await FileRepository.get_by_id(session, f.id)
         if detailed is not None:
-            cats: list[CategoryBrief] = []
-            for fc in detailed.categories:
-                cats.append(
-                    CategoryBrief(
-                        id=fc.category.id,
-                        name=fc.category.name,
-                        slug=fc.category.slug,
-                        color=fc.category.color,
-                        confidence=fc.confidence,
-                    )
+            cats: list[CategoryBrief] = [
+                CategoryBrief(
+                    id=category.id,
+                    name=category.name,
+                    slug=category.slug,
+                    color=category.color,
+                    confidence=confidence,
                 )
+                for category, confidence, _manual in effective_categories(detailed)
+            ]
             file_responses.append(
                 FileResponse(
                     id=detailed.id,
                     source_id=detailed.source_id,
+                    document_id=detailed.document_id,
                     path=detailed.path,
                     filename=detailed.filename,
                     extension=detailed.extension,

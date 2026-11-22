@@ -119,6 +119,9 @@ class FileResponse(BaseModel):
 
     id: int
     source_id: int
+    # Content identity (Phase 1a): instances sharing a document_id are the
+    # same document at different locations.
+    document_id: int | None = None
     path: str
     filename: str
     extension: str | None
@@ -155,6 +158,7 @@ class JobResponse(BaseModel):
     source_id: int | None
     total_files: int
     processed_files: int
+    moved_count: int = 0
     error_count: int
     created_at: datetime
     updated_at: datetime
