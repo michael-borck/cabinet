@@ -143,3 +143,55 @@ async def test_scan_allowed_after_job_finished(
     )
     assert response.status_code == 201
     assert response.json()["status"] == "pending"
+
+
+async def test_create_source_defaults_store_facts_on(client: AsyncClient, test_dir: str):
+    response = await client.post("/api/v1/sources", json={"path": test_dir})
+    assert response.status_code == 201
+    assert response.json()["store_facts"] is True
+
+
+async def test_disable_store_facts_purges_unreferenced_facts(
+    client: AsyncClient, session: AsyncSession, test_dir: str
+):
+    from sqlalchemy import select
+
+    from cabinet.db.models import Document, File
+    from cabinet.db.repositories import ContentFactRepository
+
+    response = await client.post("/api/v1/sources", json={"path": test_dir})
+    source_id = response.json()["id"]
+
+    doc = Document(content_hash="sha256:facts1", status="categorized")
+    session.add(doc)
+    await session.flush()
+    session.add(
+        File(
+            source_id=source_id,
+            document_id=doc.id,
+            content_hash=doc.content_hash,
+            path=f"{test_dir}/a.txt",
+            filename="a.txt",
+            size_bytes=1,
+            status="categorized",
+        )
+    )
+    await ContentFactRepository.upsert(
+        session,
+        content_hash="sha256:facts1",
+        extractor_version="1",
+        facts_version=1,
+        summary="s",
+    )
+    await session.commit()
+
+    patch = await client.patch(
+        f"/api/v1/sources/{source_id}", json={"store_facts": False}
+    )
+    assert patch.status_code == 200
+    assert patch.json()["store_facts"] is False
+
+    session.expire_all()
+    assert await ContentFactRepository.get(session, "sha256:facts1") is None
+    remaining = (await session.execute(select(Document))).scalars().all()
+    assert len(remaining) == 1  # identity is untouched; only facts are purged

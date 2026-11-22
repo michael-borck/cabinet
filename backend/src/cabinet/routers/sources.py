@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.db.engine import async_session_factory, get_session
 from cabinet.db.models import Job
-from cabinet.db.repositories import JobRepository, SourceRepository
+from cabinet.db.repositories import (
+    ContentFactRepository,
+    JobRepository,
+    SourceRepository,
+)
 from cabinet.schemas import (
     JobResponse,
     ScanRequest,
@@ -58,6 +62,7 @@ async def create_source(
         recursive=body.recursive,
         exclude_patterns=body.exclude_patterns,
         watch_enabled=body.watch_enabled,
+        store_facts=body.store_facts,
     )
     return source
 
@@ -81,6 +86,10 @@ async def update_source(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source {source_id} not found",
         )
+    # Tier 1 is shared per content hash: turning it off must only drop facts
+    # no other facts-enabled source still references (design §5.4).
+    if fields.get("store_facts") is False:
+        await ContentFactRepository.purge_unreferenced(session)
     return source
 
 

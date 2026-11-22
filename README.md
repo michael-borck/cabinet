@@ -79,7 +79,11 @@ uv run ruff check .
 3. **Run a sync** -- Cabinet extracts text, sends batches to the LLM, and stores category assignments
 4. **Browse and search** -- explore your files through the category tree or search by filename/category
 
-Text content is only held in memory during processing and is never stored in the database.
+Extracted text is held in memory during processing and raw text is never
+stored in the database. For folders with **Store AI facts** enabled (the
+default for newly added folders), Cabinet keeps a per-document AI summary,
+document type, entities, and topics so the file can be re-categorised later
+without re-reading it.
 
 ## License
 

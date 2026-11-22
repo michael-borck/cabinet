@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     watch_max_wait_seconds: float = 15.0
     # Periodic reconcile safety net for watch-enabled sources; 0 disables.
     watch_poll_interval_seconds: int = 1800
+    # Phase 2a facts pass: text budget sent to the summarisation LLM.
+    facts_input_max_chars: int = 12000
 
     model_config = {"env_prefix": "CABINET_"}
 

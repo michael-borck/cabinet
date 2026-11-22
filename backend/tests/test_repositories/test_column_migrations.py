@@ -28,6 +28,8 @@ async def test_add_missing_columns_upgrades_legacy_sources_table():
 
             await _add_missing_columns(conn)
             assert "exclude_patterns" in await _column_names(conn, "sources")
+            # Phase 2a: migrated sources default to ephemeral (facts off).
+            assert "store_facts" in await _column_names(conn, "sources")
 
             # Idempotent: a second run must not raise.
             await _add_missing_columns(conn)
@@ -37,6 +39,10 @@ async def test_add_missing_columns_upgrades_legacy_sources_table():
                 await conn.exec_driver_sql("SELECT exclude_patterns FROM sources")
             ).scalar()
             assert value is None
+            facts_default = (
+                await conn.exec_driver_sql("SELECT store_facts FROM sources")
+            ).scalar()
+            assert facts_default == 0
     finally:
         await engine.dispose()
 

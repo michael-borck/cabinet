@@ -9,11 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.config import get_settings
-from cabinet.db.models import Document, File, Job, LLMConfig
-from cabinet.db.repositories import DocumentRepository
+from cabinet.db.models import Document, File, Job, LLMConfig, Source
+from cabinet.db.repositories import ContentFactRepository, DocumentRepository
 from cabinet.extractors.base import ExtractionResult
-from cabinet.extractors.registry import get_extractor
+from cabinet.extractors.registry import EXTRACTOR_VERSION, get_extractor
+from cabinet.llm.base import LLMProvider
 from cabinet.llm.factory import create_provider
+from cabinet.services.facts import FACTS_VERSION, FactsService
 from cabinet.utils.cloud import is_cloud_placeholder
 
 logger = logging.getLogger(__name__)
@@ -55,10 +57,21 @@ class PipelineService:
             logger.info("Job %d already cancelled; skipping pipeline", job_id)
             return
 
+        # Facts are opt-in per source (design §5.4, D3). Without an active
+        # provider we cannot build them and fall back to ephemeral snippets.
+        source = (
+            await self._session.get(Source, job.source_id)
+            if job.source_id is not None
+            else None
+        )
+        facts_enabled = bool(source and source.store_facts)
+        provider = await self._get_active_provider()
+
         # Determine which files to process ------------------------------------
-        # "extracted" files are retried: they were extracted in a previous run
-        # whose categorization failed or skipped them (text is ephemeral, so
-        # they go through extraction again).
+        # "extracted" files are retried: their previous run failed or skipped
+        # categorisation. With fresh Tier-1 facts they are re-categorised
+        # without re-extraction; otherwise text is ephemeral and they extract
+        # again.
         # Only ids are held for the whole run; each batch re-fetches its File
         # rows. A rollback expires every instance in the session, and touching
         # an expired attribute on an AsyncSession raises MissingGreenlet — so
@@ -131,15 +144,68 @@ class PipelineService:
                 runnable.append(file)
             batch = runnable
 
-            # -- Extraction ---------------------------------------------------
+            # -- Extraction / facts -------------------------------------------
+            # Tier 1 (design §5.2): reuse fresh facts instead of extracting
+            # again. Per-document, so every instance of a hash pays once.
             extracted_batch: list[File] = []
             extracted_texts: dict[int, str] = {}
+            facts_map: dict[int, object] = {}
             for file in batch:
                 try:
-                    extraction = await self._extract_file(file)
+                    extraction: ExtractionResult | None = None
+                    fact = None
+                    content_hash = await self._content_hash(file)
+
+                    if facts_enabled and provider is not None and content_hash:
+                        fact = await self._fresh_fact(content_hash)
+
+                    if fact is not None:
+                        # Fresh: no extraction, no facts LLM call.
+                        facts_map[file.id] = fact
+                        await self._set_status(file, "extracted")
+                        extracted_batch.append(file)
+                        continue
+
+                    if file.extension:
+                        extraction = await self._extract_file(file)
+
+                    if (
+                        facts_enabled
+                        and provider is not None
+                        and content_hash
+                        and extraction is not None
+                        and extraction.text.strip()
+                    ):
+                        try:
+                            await self._build_and_store_facts(
+                                file, content_hash, extraction, provider
+                            )
+                        except Exception as exc:
+                            # Facts failed: leave this document "extracted" so
+                            # the next run retries it, and isolate the failure
+                            # from the rest of the batch (design §5.2 step 5).
+                            logger.exception(
+                                "Facts extraction failed for file %d (%s)",
+                                file.id,
+                                file.path,
+                            )
+                            await self._set_status(file, "extracted")
+                            job.error_count += 1
+                            _append_error_log(
+                                job, f"[facts] file_id={file.id}: {exc}"
+                            )
+                            continue
+
+                        fact = await ContentFactRepository.get(
+                            self._session, content_hash
+                        )
+                        facts_map[file.id] = fact
+                        await self._set_status(file, "extracted")
+                        extracted_batch.append(file)
+                        continue
+
                     if extraction is not None:
                         extracted_texts[file.id] = extraction.text
-
                     await self._set_status(file, "extracted")
                     extracted_batch.append(file)
                 except Exception as exc:
@@ -152,7 +218,7 @@ class PipelineService:
                         job, f"[extract] file_id={file.id}: {exc}"
                     )
 
-            # Persist extraction outcomes before the LLM call so a
+            # Persist extraction/facts outcomes before the LLM call so a
             # categorization failure can't roll them back with its own writes.
             await self._session.commit()
 
@@ -160,7 +226,10 @@ class PipelineService:
             if extracted_batch:
                 try:
                     categorized_ids = await self._categorize_batch(
-                        extracted_batch, extracted_texts
+                        extracted_batch,
+                        extracted_texts,
+                        facts_map=facts_map,
+                        provider=provider,
                     )
                 except Exception as exc:
                     logger.exception(
@@ -231,6 +300,78 @@ class PipelineService:
         return job.status == "cancelled"
 
     # ------------------------------------------------------------------
+    # Facts (Phase 2a)
+    # ------------------------------------------------------------------
+
+    async def _get_active_provider(self) -> LLMProvider | None:
+        """Build the active provider once per run, or None when unconfigured."""
+        result = await self._session.execute(
+            select(LLMConfig).where(LLMConfig.is_active == True)  # noqa: E712
+        )
+        config = result.scalar_one_or_none()
+        if config is None:
+            return None
+        return create_provider(
+            provider=config.provider,
+            model=config.model,
+            api_key=config.api_key,
+            base_url=config.base_url,
+        )
+
+    async def _content_hash(self, file: File) -> str | None:
+        """The instance's mirrored hash, else its document's hash."""
+        if file.content_hash:
+            return file.content_hash
+        if file.document_id is None:
+            return None
+        doc = await self._session.get(Document, file.document_id)
+        return doc.content_hash if doc is not None else None
+
+    async def _fresh_fact(self, content_hash: str):
+        """Return a reusable fact row, or None when missing/stale."""
+        fact = await ContentFactRepository.get(self._session, content_hash)
+        if ContentFactRepository.is_fresh(
+            fact,
+            extractor_version=EXTRACTOR_VERSION,
+            facts_version=FACTS_VERSION,
+        ):
+            return fact
+        return None
+
+    async def _build_and_store_facts(
+        self,
+        file: File,
+        content_hash: str,
+        extraction: ExtractionResult,
+        provider: LLMProvider,
+    ) -> None:
+        """Run the facts pass and cache it; raises for the caller to isolate."""
+        service = FactsService(
+            provider,
+            input_max_chars=self._settings.facts_input_max_chars,
+        )
+        result = await service.build_facts(
+            filename=file.filename,
+            extension=file.extension,
+            text=extraction.text,
+            metadata=extraction.metadata,
+        )
+        await ContentFactRepository.upsert(
+            self._session,
+            content_hash=content_hash,
+            extractor_version=EXTRACTOR_VERSION,
+            facts_version=FACTS_VERSION,
+            summary=result.summary,
+            doc_type=result.doc_type,
+            language=result.language,
+            entities=result.entities or None,
+            topics=result.topics or None,
+            provenance=result.provenance,
+            char_count=result.char_count,
+            page_count=result.provenance.get("page_count"),
+        )
+
+    # ------------------------------------------------------------------
     # Extraction
     # ------------------------------------------------------------------
 
@@ -285,7 +426,12 @@ class PipelineService:
     # ------------------------------------------------------------------
 
     async def _categorize_batch(
-        self, files: list[File], extracted_texts: dict[int, str]
+        self,
+        files: list[File],
+        extracted_texts: dict[int, str],
+        *,
+        facts_map: dict[int, object] | None = None,
+        provider: LLMProvider | None = None,
     ) -> set[int] | None:
         """Categorize a batch of files using the active LLM config.
 
@@ -294,28 +440,18 @@ class PipelineService:
             or *None* when no active LLM configuration exists (files then stay
             in the ``"extracted"`` state).
         """
-        # Find the active LLM configuration -----------------------------------
-        result = await self._session.execute(
-            select(LLMConfig).where(LLMConfig.is_active == True)  # noqa: E712
-        )
-        llm_config = result.scalar_one_or_none()
-        if llm_config is None:
+        if provider is None:
+            provider = await self._get_active_provider()
+        if provider is None:
             logger.debug("No active LLM configuration; skipping categorization")
             return None
 
-        # Build the provider and delegate to CategorizationService -------------
+        # Import here to avoid a module cycle with CategorizationService.
         from cabinet.services.categorization import CategorizationService
-
-        provider = create_provider(
-            provider=llm_config.provider,
-            model=llm_config.model,
-            api_key=llm_config.api_key,
-            base_url=llm_config.base_url,
-        )
 
         categorizer = CategorizationService(self._session, provider)
         return await categorizer.categorize_files(
-            files, extracted_texts=extracted_texts
+            files, extracted_texts=extracted_texts, facts=facts_map
         )
 
 

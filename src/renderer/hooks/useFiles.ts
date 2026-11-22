@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getFiles, getFile, assignCategories, removeFileCategory } from '@/services/api'
+import { getFiles, getFile, getFileFacts, assignCategories, removeFileCategory } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 
 export function useFiles(params: Record<string, unknown> = {}) {
@@ -67,6 +67,16 @@ export function useFile(id: number | null) {
     queryKey: queryKeys.file(id!),
     queryFn: () => getFile(id!),
     enabled: id !== null,
+  })
+}
+
+export function useFileFacts(id: number | null) {
+  return useQuery({
+    queryKey: ['file-facts', id],
+    queryFn: () => getFileFacts(id!),
+    enabled: id !== null,
+    // 404 (no facts stored) is a normal state, not a transient error.
+    retry: false,
   })
 }
 

@@ -131,3 +131,67 @@ async def test_cloud_placeholder_reported_over_api(
     resp = await client.get(f"/api/v1/files/{file.id}")
     assert resp.status_code == 200
     assert resp.json()["availability"] == "cloud_placeholder"
+
+
+async def test_get_file_facts(
+    client: AsyncClient, session: AsyncSession, tmp_path
+):
+    from cabinet.db.repositories import ContentFactRepository
+
+    source = Source(path=str(tmp_path), recursive=True, store_facts=True)
+    session.add(source)
+    await session.flush()
+    document = Document(content_hash="sha256:factsx", status="categorized")
+    session.add(document)
+    await session.flush()
+    file = File(
+        source_id=source.id,
+        document_id=document.id,
+        content_hash=document.content_hash,
+        path=str(tmp_path / "a.txt"),
+        filename="a.txt",
+        size_bytes=1,
+        status="categorized",
+    )
+    session.add(file)
+    await ContentFactRepository.upsert(
+        session,
+        content_hash="sha256:factsx",
+        extractor_version="1",
+        facts_version=1,
+        summary="Invoice summary",
+        doc_type="invoice",
+        topics=["billing"],
+    )
+    await session.commit()
+
+    response = await client.get(f"/api/v1/files/{file.id}/facts")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"] == "Invoice summary"
+    assert body["doc_type"] == "invoice"
+    assert body["topics"] == ["billing"]
+    assert body["stale"] is False
+
+
+async def test_get_file_facts_404_when_absent(client: AsyncClient, session: AsyncSession):
+    source = Source(path="/tmp/cabinet-no-facts", recursive=True, store_facts=True)
+    session.add(source)
+    await session.flush()
+    document = Document(content_hash="sha256:nofacts", status="pending")
+    session.add(document)
+    await session.flush()
+    file = File(
+        source_id=source.id,
+        document_id=document.id,
+        content_hash=document.content_hash,
+        path="/tmp/cabinet-no-facts/a.txt",
+        filename="a.txt",
+        size_bytes=1,
+        status="pending",
+    )
+    session.add(file)
+    await session.commit()
+
+    response = await client.get(f"/api/v1/files/{file.id}/facts")
+    assert response.status_code == 404

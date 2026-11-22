@@ -3,7 +3,9 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cabinet.db.models import Document, File, Job, Source
+from cabinet.db.models import ContentFact, Document, File, Job, Source
+from cabinet.db.repositories import ContentFactRepository
+from cabinet.extractors.base import ExtractionResult
 from cabinet.services.pipeline import PipelineService
 
 
@@ -177,7 +179,7 @@ async def test_failed_batch_does_not_abort_run(
 
     calls: list[list[int]] = []
 
-    async def flaky_categorize(self, batch, extracted_texts):
+    async def flaky_categorize(self, batch, extracted_texts, **kwargs):
         calls.append([f.id for f in batch])
         if len(calls) == 1:
             raise RuntimeError("LLM exploded")
@@ -243,3 +245,170 @@ async def test_flagged_placeholder_is_not_selected(
     await session.refresh(job)
     assert file.status == "pending"  # untouched, not queued
     assert job.total_files == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2a facts cache
+# ---------------------------------------------------------------------------
+
+class _FactsProvider:
+    """Fake LLM: facts JSON for the facts pass, assignments for categorisation."""
+
+    def __init__(self, fail_first_facts: bool = False) -> None:
+        self.fail_first_facts = fail_first_facts
+        self.failed = False
+        self.facts_calls = 0
+        self.category_calls = 0
+
+    async def complete_json(self, system_prompt: str, user_prompt: str) -> dict:
+        if "document-analysis" in system_prompt:
+            self.facts_calls += 1
+            if self.fail_first_facts and not self.failed:
+                self.failed = True
+                raise RuntimeError("facts boom")
+            return {
+                "summary": "A summary.",
+                "doc_type": "note",
+                "topics": ["t"],
+                "entities": {},
+            }
+        self.category_calls += 1
+        return {"files": []}
+
+
+async def _make_source(session, tmp_path, *, store_facts: bool = True) -> Source:
+    source = Source(path=str(tmp_path), recursive=True, store_facts=store_facts)
+    session.add(source)
+    await session.flush()
+    return source
+
+
+async def _add_hashed_file(session, source, tmp_path, name, digest):
+    target = tmp_path / name
+    target.write_text("content of " + name)
+    doc = Document(content_hash=digest, status="pending")
+    session.add(doc)
+    await session.flush()
+    file = File(
+        source_id=source.id,
+        document_id=doc.id,
+        content_hash=digest,
+        path=str(target),
+        filename=name,
+        extension=".txt",
+        size_bytes=target.stat().st_size,
+        status="pending",
+    )
+    session.add(file)
+    await session.flush()
+    return file, doc
+
+
+def _patch_facts_run(monkeypatch, provider, extractions):
+    async def fake_provider(self):
+        return provider
+
+    async def fake_extract(self, file):
+        extractions.append(file.id)
+        return ExtractionResult(text="content", metadata={}, char_count=7)
+
+    monkeypatch.setattr(PipelineService, "_get_active_provider", fake_provider)
+    monkeypatch.setattr(PipelineService, "_extract_file", fake_extract)
+
+
+async def test_facts_built_once_then_reused(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    source = await _make_source(session, tmp_path)
+    file, doc = await _add_hashed_file(session, source, tmp_path, "a.txt", "sha256:aaa")
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    provider = _FactsProvider()
+    extractions: list[int] = []
+    _patch_facts_run(monkeypatch, provider, extractions)
+
+    pipeline = PipelineService(session)
+    await pipeline.process_pending_files(job.id)
+
+    assert provider.facts_calls == 1
+    assert extractions == [file.id]
+    fact = await ContentFactRepository.get(session, "sha256:aaa")
+    assert fact is not None and fact.summary == "A summary."
+    assert fact.facts_version == 1
+    await session.refresh(doc)
+    assert doc.status == "extracted"  # no assignments returned
+
+    # Second run: facts are fresh -> no extraction, no facts LLM call.
+    await pipeline.process_pending_files(job.id)
+    assert provider.facts_calls == 1
+    assert extractions == [file.id]
+    assert provider.category_calls == 2
+
+
+async def test_facts_failure_is_isolated_and_retried(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    source = await _make_source(session, tmp_path)
+    file_a, _ = await _add_hashed_file(session, source, tmp_path, "a.txt", "sha256:aaa")
+    file_b, _ = await _add_hashed_file(session, source, tmp_path, "b.txt", "sha256:bbb")
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    provider = _FactsProvider(fail_first_facts=True)
+    extractions: list[int] = []
+    _patch_facts_run(monkeypatch, provider, extractions)
+    categorize_calls: list[list[int]] = []
+
+    async def fake_categorize(self, files, extracted_texts, **kwargs):
+        categorize_calls.append([f.id for f in files])
+        return {f.id for f in files}
+
+    monkeypatch.setattr(PipelineService, "_categorize_batch", fake_categorize)
+
+    pipeline = PipelineService(session)
+    await pipeline.process_pending_files(job.id, batch_size=1)
+
+    await session.refresh(file_a)
+    await session.refresh(file_b)
+    await session.refresh(job)
+    assert file_a.status == "extracted"  # retried, not failed outright
+    assert file_b.status == "categorized"
+    assert categorize_calls == [[file_b.id]]  # A excluded from this batch
+    assert job.error_count == 1
+    assert "[facts]" in (job.error_log or "")
+
+    # Next run retries A and succeeds.
+    await pipeline.process_pending_files(job.id, batch_size=1)
+    assert await ContentFactRepository.get(session, "sha256:aaa") is not None
+
+
+async def test_store_facts_off_keeps_ephemeral_path(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    source = await _make_source(session, tmp_path, store_facts=False)
+    file, doc = await _add_hashed_file(session, source, tmp_path, "a.txt", "sha256:aaa")
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    provider = _FactsProvider()
+    extractions: list[int] = []
+    _patch_facts_run(monkeypatch, provider, extractions)
+
+    async def fake_categorize(self, files, extracted_texts, **kwargs):
+        assert file.id in extracted_texts  # snippet path was used
+        return {f.id for f in files}
+
+    monkeypatch.setattr(PipelineService, "_categorize_batch", fake_categorize)
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    facts = (await session.execute(select(ContentFact))).scalars().all()
+    assert facts == []
+    assert provider.facts_calls == 0
+    assert extractions == [file.id]
+    await session.refresh(doc)
+    assert doc.status == "categorized"

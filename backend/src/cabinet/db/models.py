@@ -42,6 +42,11 @@ class Source(Base):
     # the volume root, so a drive remounting elsewhere can be found again.
     volume_id: Mapped[str | None] = mapped_column(String, nullable=True)
     volume_rel_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Tier 1 derived facts (Phase 2a, D3): on for new sources, off for
+    # migrated ones. Disabling purges facts no enabled source references.
+    store_facts: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="0", nullable=False
+    )
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
@@ -107,6 +112,44 @@ class Document(Base):
 
     def __repr__(self) -> str:
         return f"<Document id={self.id} hash={self.content_hash!r}>"
+
+
+class ContentFact(Base):
+    """Derived facts for one document content hash (Phase 2a, design §5).
+
+    Keyed by the *content hash* so every path instance and every exact
+    duplicate shares one row. Deliberately a separate table from
+    ``documents``: identity stays lean and facts can be purged independently
+    when a source turns Tier-1 storage off. Embedding columns arrive with 2b.
+    """
+
+    __tablename__ = "content_facts"
+
+    content_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    # Bumped when extractor output or the facts prompt/parser changes; a
+    # mismatch makes the row stale and force a rebuild.
+    extractor_version: Mapped[str] = mapped_column(String, nullable=False)
+    facts_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    doc_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    language: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Best-effort, schema-tolerant: {people, organisations, dates, amounts}.
+    entities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    topics: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Locators for the cited content (page/sheet counts, headings, sampled
+    # segment offsets) so a fact can be traced back to the original.
+    provenance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    char_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"<ContentFact hash={self.content_hash!r}>"
 
 
 class File(Base):

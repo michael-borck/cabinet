@@ -4,6 +4,10 @@ from .pdf import PDFExtractor
 from .text import TextExtractor
 from .xlsx import XlsxExtractor
 
+# Bumped whenever any extractor's output changes meaningfully; facts rows
+# recording an older version are rebuilt on the next run (design §5.1).
+EXTRACTOR_VERSION = "1"
+
 _text_extractor = TextExtractor()
 _pdf_extractor = PDFExtractor()
 _docx_extractor = DocxExtractor()

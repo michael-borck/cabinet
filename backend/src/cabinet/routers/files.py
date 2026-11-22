@@ -7,20 +7,24 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.db.engine import get_session
-from cabinet.db.models import DocumentCategory
+from cabinet.db.models import Document, DocumentCategory
 from cabinet.db.repositories import (
     CategoryRepository,
+    ContentFactRepository,
     DocumentRepository,
     FileRepository,
     SourceRepository,
     effective_categories,
 )
+from cabinet.extractors.registry import EXTRACTOR_VERSION
 from cabinet.schemas import (
     CategoryBrief,
     FileCategoryAssign,
+    FileFactsResponse,
     FileListResponse,
     FileResponse,
 )
+from cabinet.services.facts import FACTS_VERSION
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -120,6 +124,42 @@ async def get_file(
         file,
         source_available=source is None or source.availability == "available",
     )
+
+
+@router.get("/{file_id}/facts", response_model=FileFactsResponse)
+async def get_file_facts(
+    file_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Return cached Tier-1 facts for this file's document, if any."""
+    file = await FileRepository.get_by_id(session, file_id)
+    if file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {file_id} not found",
+        )
+    content_hash = file.content_hash
+    if content_hash is None and file.document_id is not None:
+        document = await session.get(Document, file.document_id)
+        content_hash = document.content_hash if document is not None else None
+    if content_hash is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No facts: file has no content hash.",
+        )
+    fact = await ContentFactRepository.get(session, content_hash)
+    if fact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No facts stored for this document.",
+        )
+    response = FileFactsResponse.model_validate(fact)
+    response.stale = not ContentFactRepository.is_fresh(
+        fact,
+        extractor_version=EXTRACTOR_VERSION,
+        facts_version=FACTS_VERSION,
+    )
+    return response
 
 
 @router.post(

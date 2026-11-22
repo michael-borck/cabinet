@@ -24,7 +24,7 @@ Cabinet is a desktop app that uses AI to categorize files into virtual folders. 
 
 ## Key Design Decisions
 
-- Text extraction is **ephemeral** -- extracted content is held in a `dict[int, str]` during pipeline processing, passed to the categorizer, then discarded. No text is stored in the database.
+- Text extraction is **ephemeral** at Tier 0 -- extracted content is held in a `dict[int, str]` during pipeline processing, passed to the facts pass/categorizer, then discarded. Raw text is never stored. With Phase 2a Tier 1 (`sources.store_facts`, on for new sources), AI-derived facts (summary, doc type, entities, topics, provenance) are kept per document hash in `content_facts`; turning the flag off purges facts no enabled source references. Tier 2 full-text indexing is not implemented.
 - File status flows: `pending` -> `extracted` -> `categorized`
 - Files are processed in **batches of 10** (configurable via `categorization_batch_size`)
 - Search is **client-side** -- filters on filename and category name using already-loaded data

@@ -51,6 +51,7 @@ export function useSyncStatus() {
     if (jobFinished) {
       qc.invalidateQueries({ queryKey: ['files'] })
       qc.invalidateQueries({ queryKey: ['categories'] })
+      qc.invalidateQueries({ queryKey: ['file-facts'] })
       qc.invalidateQueries({ queryKey: queryKeys.jobs })
     }
   }, [jobs, qc])

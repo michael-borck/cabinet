@@ -12,12 +12,13 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from cabinet.db.models import (
     Category,
+    ContentFact,
     Document,
     DocumentCategory,
     File,
@@ -92,6 +93,7 @@ class SourceRepository:
         recursive: bool = True,
         exclude_patterns: list[str] | None = None,
         watch_enabled: bool = False,
+        store_facts: bool = True,
     ) -> Source:
         volume_id, volume_rel_path = describe_source_root(path)
         source = Source(
@@ -100,6 +102,7 @@ class SourceRepository:
             recursive=recursive,
             exclude_patterns=exclude_patterns or None,
             watch_enabled=watch_enabled,
+            store_facts=store_facts,
             volume_id=volume_id,
             volume_rel_path=volume_rel_path,
         )
@@ -319,6 +322,91 @@ class DocumentRepository:
         for inst in instances:
             if inst.status not in ("missing", "deferred"):
                 inst.status = status
+
+
+# ---------------------------------------------------------------------------
+# ContentFactRepository (Phase 2a, design §5)
+# ---------------------------------------------------------------------------
+
+
+class ContentFactRepository:
+    """Derived facts keyed by document content hash."""
+
+    @staticmethod
+    async def get(session: AsyncSession, content_hash: str) -> ContentFact | None:
+        """Return the fact row for *content_hash* (legacy bare hex accepted)."""
+        return await session.get(ContentFact, prefixed_hash(content_hash))
+
+    @staticmethod
+    def is_fresh(
+        fact: ContentFact | None,
+        *,
+        extractor_version: str,
+        facts_version: int,
+    ) -> bool:
+        """A row is reusable only when both versions still match (design §5.2)."""
+        return (
+            fact is not None
+            and fact.extractor_version == extractor_version
+            and fact.facts_version == facts_version
+        )
+
+    @staticmethod
+    async def upsert(
+        session: AsyncSession,
+        *,
+        content_hash: str,
+        extractor_version: str,
+        facts_version: int,
+        summary: str | None = None,
+        doc_type: str | None = None,
+        language: str | None = None,
+        entities: dict | None = None,
+        topics: list | None = None,
+        provenance: dict | None = None,
+        char_count: int | None = None,
+        page_count: int | None = None,
+    ) -> ContentFact:
+        """Create or replace the fact row for *content_hash*."""
+        key = prefixed_hash(content_hash)
+        fact = await session.get(ContentFact, key)
+        if fact is None:
+            fact = ContentFact(content_hash=key)
+            session.add(fact)
+        fact.extractor_version = extractor_version
+        fact.facts_version = facts_version
+        fact.summary = summary
+        fact.doc_type = doc_type
+        fact.language = language
+        fact.entities = entities
+        fact.topics = topics
+        fact.provenance = provenance
+        fact.char_count = char_count
+        fact.page_count = page_count
+        await session.flush()
+        return fact
+
+    @staticmethod
+    async def purge_unreferenced(session: AsyncSession) -> int:
+        """Delete facts no facts-enabled source still references (D3).
+
+        Facts are shared per hash, so turning Tier 1 off for one source must
+        keep rows still reachable through another enabled source.
+        """
+        referenced = (
+            select(Document.content_hash)
+            .join(File, File.document_id == Document.id)
+            .join(Source, Source.id == File.source_id)
+            .where(
+                Source.store_facts == True,  # noqa: E712
+                Document.content_hash.isnot(None),
+            )
+        )
+        result = await session.execute(
+            delete(ContentFact).where(ContentFact.content_hash.notin_(referenced))
+        )
+        await session.flush()
+        return result.rowcount or 0
 
 
 # ---------------------------------------------------------------------------

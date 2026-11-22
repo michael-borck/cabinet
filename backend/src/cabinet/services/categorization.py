@@ -33,6 +33,7 @@ class CategorizationService:
         self,
         files: list[File],
         extracted_texts: dict[int, str] | None = None,
+        facts: dict[int, Any] | None = None,
     ) -> set[int]:
         """Categorize a list of files via the configured LLM.
 
@@ -41,9 +42,11 @@ class CategorizationService:
 
         Args:
             files: The files to categorize.
-            extracted_texts: Mapping of ``file.id`` to extracted text content.
-                When provided, text is read from this dict rather than from
-                ``file.extracted_text``.
+            extracted_texts: Mapping of ``file.id`` to extracted text content
+                (the ephemeral Tier-0 path).
+            facts: Mapping of ``file.id`` to cached Tier-1 facts. When a file
+                has facts, its summary/type/entities/topics are used instead
+                of a raw text snippet (design §5.2 step 4).
 
         Returns:
             The ids of files that received at least one category assignment.
@@ -54,6 +57,8 @@ class CategorizationService:
 
         if extracted_texts is None:
             extracted_texts = {}
+        if facts is None:
+            facts = {}
 
         # Assignments are written at document level (design §3.1); make
         # sure every file has a document before resolving categories.
@@ -67,7 +72,7 @@ class CategorizationService:
         # Build prompts and call the LLM -------------------------------------
         system_prompt = self._build_system_prompt()
         user_prompt = await self._build_user_prompt(
-            files, existing_categories, extracted_texts
+            files, existing_categories, extracted_texts, facts
         )
 
         llm_result = await self._provider.complete_json(system_prompt, user_prompt)
@@ -103,6 +108,7 @@ class CategorizationService:
         files: list[File],
         existing_categories: list[Category],
         extracted_texts: dict[int, str],
+        facts: dict[int, Any] | None = None,
     ) -> str:
         """Build the user prompt containing file data and the existing category tree."""
         # --- Existing category tree ------------------------------------------
@@ -119,22 +125,27 @@ class CategorizationService:
             tree_section = "Existing categories: (none yet)"
 
         # --- File entries ----------------------------------------------------
+        facts = facts or {}
         file_lines: list[str] = []
         for idx, file in enumerate(files):
-            text_snippet = ""
-            raw_text = extracted_texts.get(file.id)
-            if raw_text:
-                text_snippet, _ = truncate_text(
-                    raw_text, _FILE_TEXT_PREVIEW_CHARS
-                )
-                text_snippet = (
-                    f"\n    Text (first {_FILE_TEXT_PREVIEW_CHARS} chars):"
-                    f" {text_snippet}"
-                )
+            context = ""
+            fact = facts.get(file.id)
+            if fact is not None:
+                context = _render_facts(fact)
+            else:
+                raw_text = extracted_texts.get(file.id)
+                if raw_text:
+                    text_snippet, _ = truncate_text(
+                        raw_text, _FILE_TEXT_PREVIEW_CHARS
+                    )
+                    context = (
+                        f"\n    Text (first {_FILE_TEXT_PREVIEW_CHARS} chars):"
+                        f" {text_snippet}"
+                    )
 
             file_lines.append(
                 f"[{idx}] filename={file.filename!r}  extension={file.extension!r}  "
-                f"size_bytes={file.size_bytes}{text_snippet}"
+                f"size_bytes={file.size_bytes}{context}"
             )
 
         files_section = "Files to categorize:\n" + "\n\n".join(file_lines)
@@ -345,6 +356,30 @@ class CategorizationService:
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
+
+def _render_facts(fact: Any) -> str:
+    """Render cached facts as the file's categorisation context."""
+    parts: list[str] = []
+    summary = getattr(fact, "summary", None)
+    if summary:
+        parts.append(f"\n    Summary: {summary}")
+    doc_type = getattr(fact, "doc_type", None)
+    if doc_type:
+        parts.append(f"\n    Document type: {doc_type}")
+    topics = getattr(fact, "topics", None) or []
+    if topics:
+        parts.append(f"\n    Topics: {', '.join(str(t) for t in topics)}")
+    entities = getattr(fact, "entities", None) or {}
+    if isinstance(entities, dict):
+        rendered = [
+            f"{key}: {', '.join(str(v) for v in values)}"
+            for key, values in entities.items()
+            if isinstance(values, list) and values
+        ]
+        if rendered:
+            parts.append("\n    Entities: " + "; ".join(rendered))
+    return "".join(parts)
+
 
 def _category_path(
     category: Category, by_id: dict[int, Category]

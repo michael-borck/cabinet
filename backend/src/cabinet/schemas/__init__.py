@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
@@ -31,6 +31,8 @@ class SourceCreate(BaseModel):
     recursive: bool = True
     exclude_patterns: list[str] = Field(default_factory=list)
     watch_enabled: bool = False
+    # Tier 1 facts (Phase 2a): on for new sources, off for migrated ones.
+    store_facts: bool = True
 
     _clean = field_validator("exclude_patterns")(_clean_patterns)
 
@@ -40,6 +42,7 @@ class SourceUpdate(BaseModel):
     recursive: bool | None = None
     exclude_patterns: list[str] | None = None
     watch_enabled: bool | None = None
+    store_facts: bool | None = None
 
     _clean = field_validator("exclude_patterns")(_clean_patterns)
 
@@ -53,6 +56,8 @@ class SourceResponse(BaseModel):
     recursive: bool
     exclude_patterns: list[str] = Field(default_factory=list)
     watch_enabled: bool = False
+    # Tier 1 facts storage (Phase 2a, D3).
+    store_facts: bool = False
     # Derived at read time from the filesystem ("available" / "unavailable").
     availability: str = "available"
     last_scanned_at: datetime | None
@@ -151,6 +156,27 @@ class FileListResponse(BaseModel):
 
 class FileCategoryAssign(BaseModel):
     category_ids: list[int]
+
+
+class FileFactsResponse(BaseModel):
+    """Derived Tier-1 facts for a file's document (Phase 2a)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    content_hash: str
+    extractor_version: str
+    facts_version: int
+    summary: str | None
+    doc_type: str | None
+    language: str | None
+    entities: dict[str, Any] | None = None
+    topics: list[str] | None = None
+    provenance: dict[str, Any] | None = None
+    char_count: int | None = None
+    page_count: int | None = None
+    # True when extractor/facts versions no longer match (will be rebuilt).
+    stale: bool = False
+    updated_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------

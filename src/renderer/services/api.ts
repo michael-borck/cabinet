@@ -23,9 +23,9 @@ api.interceptors.request.use(async (config) => {
 
 // Sources
 export const getSources = () => api.get('/sources').then(r => r.data)
-export const createSource = (data: { path: string; label?: string; recursive?: boolean; exclude_patterns?: string[]; watch_enabled?: boolean }) =>
+export const createSource = (data: { path: string; label?: string; recursive?: boolean; exclude_patterns?: string[]; watch_enabled?: boolean; store_facts?: boolean }) =>
   api.post('/sources', data).then(r => r.data)
-export const updateSource = (id: number, data: { label?: string; recursive?: boolean; exclude_patterns?: string[]; watch_enabled?: boolean }) =>
+export const updateSource = (id: number, data: { label?: string; recursive?: boolean; exclude_patterns?: string[]; watch_enabled?: boolean; store_facts?: boolean }) =>
   api.patch(`/sources/${id}`, data).then(r => r.data)
 export const deleteSource = (id: number) => api.delete(`/sources/${id}`)
 export const scanSource = (id: number, mode: string = 'quick_sync') =>
@@ -35,6 +35,7 @@ export const scanSource = (id: number, mode: string = 'quick_sync') =>
 export const getFiles = (params: Record<string, unknown>) =>
   api.get('/files', { params }).then(r => r.data)
 export const getFile = (id: number) => api.get(`/files/${id}`).then(r => r.data)
+export const getFileFacts = (id: number) => api.get(`/files/${id}/facts`).then(r => r.data)
 export const assignCategories = (fileId: number, categoryIds: number[]) =>
   api.post(`/files/${fileId}/categories`, { category_ids: categoryIds }).then(r => r.data)
 export const removeFileCategory = (fileId: number, categoryId: number) =>

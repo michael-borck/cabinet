@@ -262,6 +262,8 @@ _ADDED_COLUMNS = [
     ("jobs", "trigger", "VARCHAR NOT NULL DEFAULT 'manual'"),
     # Phase 1b: cloud-placeholder detection cache (D4).
     ("files", "is_placeholder", "BOOLEAN NOT NULL DEFAULT 0"),
+    # Phase 2a: Tier 1 facts storage (D3). Existing/migrated sources opt in.
+    ("sources", "store_facts", "BOOLEAN NOT NULL DEFAULT 0"),
 ]
 
 

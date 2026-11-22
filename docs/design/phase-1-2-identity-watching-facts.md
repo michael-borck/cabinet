@@ -1,6 +1,6 @@
 # Design: Phase 1 (content identity + folder watching) and Phase 2 (facts cache)
 
-- **Status:** Draft for review — Phase 1a/1b implemented.
+- **Status:** Draft for review — Phase 1a/1b and Phase 2a implemented.
   Decisions D1–D4 and D7 settled 2026-11-22 (§7); D5–D6 remain open
 - **Date:** 2026-11-22
 - **Scope:** Phase 1a content-based file identity, Phase 1b folder watching,
@@ -383,6 +383,11 @@ the row by construction, since they are instances of the same document:
 | `embedding_dim` | Integer, nullable | guards against silent model swaps |
 | `char_count`, `page_count` | Integer, nullable | from extractor metadata |
 | `created_at`, `updated_at` | DateTime | |
+
+**Implemented (2a):** the table ships without the embedding columns; 2b
+adds them. Facts carry a `provenance` JSON (page/sheet counts, headings,
+sheet names, sampled-vs-source char counts) so a citation can be traced
+back to the original. Exact duplicates share a row by hash.
 
 Orphaned facts (their document has no live instances) are kept for a grace
 period aligned with tombstone retention (§7, D6), then garbage-collected

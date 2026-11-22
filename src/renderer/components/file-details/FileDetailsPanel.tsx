@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useCategories } from '@/hooks/useCategories'
-import { useAssignCategories, useFile, useRemoveFileCategory } from '@/hooks/useFiles'
+import { useAssignCategories, useFile, useFileFacts, useRemoveFileCategory } from '@/hooks/useFiles'
 import { useSelectionStore } from '@/stores/selectionStore'
 
 function formatSize(bytes: number): string {
@@ -95,6 +95,7 @@ function AddCategoryPicker({ fileId, assignedIds }: { fileId: number; assignedId
 export function FileDetailsPanel() {
   const { selectedFileId, setSelectedFile } = useSelectionStore()
   const { data: file } = useFile(selectedFileId)
+  const { data: facts } = useFileFacts(selectedFileId)
   const removeCat = useRemoveFileCategory()
 
   if (!selectedFileId || !file) {
@@ -149,6 +150,26 @@ export function FileDetailsPanel() {
               </div>
             )}
           </div>
+
+          {/* Tier-1 facts (Phase 2a) */}
+          {facts?.summary && (
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">AI summary</span>
+                {facts.stale && (
+                  <span className="text-[10px] text-muted-foreground">out of date</span>
+                )}
+              </div>
+              <p className="mt-1 text-xs leading-relaxed">{facts.summary}</p>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {facts.doc_type && <Badge variant="secondary">{facts.doc_type}</Badge>}
+                {facts.language && <Badge variant="outline">{facts.language}</Badge>}
+                {(facts.topics ?? []).map((topic: string) => (
+                  <Badge key={topic} variant="outline">{topic}</Badge>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex gap-2">

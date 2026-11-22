@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff } from 'lucide-react'
+import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles } from 'lucide-react'
 import { isAxiosError } from 'axios'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,6 +26,7 @@ interface SourceRow {
   label: string | null
   exclude_patterns: string[]
   watch_enabled: boolean
+  store_facts: boolean
   availability: string
 }
 
@@ -77,6 +78,12 @@ function SourcesTab() {
       updateSource(id, { watch_enabled: enabled }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.sources }) },
     onError: (err) => { toast.error(`Failed to update watching: ${errorDetail(err)}`) },
+  })
+  const factsMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      updateSource(id, { store_facts: enabled }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.sources }) },
+    onError: (err) => { toast.error(`Failed to update facts storage: ${errorDetail(err)}`) },
   })
   const excludesMut = useMutation({
     mutationFn: ({ id, patterns }: { id: number; patterns: string[] }) =>
@@ -130,6 +137,18 @@ function SourcesTab() {
                   onClick={() => watchMut.mutate({ id: s.id, enabled: !s.watch_enabled })}
                 >
                   {s.watch_enabled ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title={s.store_facts
+                    ? 'Stop storing AI summaries/facts for this folder (purges unreferenced facts)'
+                    : 'Store AI summaries/facts for this folder'}
+                  className={s.store_facts ? 'text-primary' : undefined}
+                  disabled={factsMut.isPending}
+                  onClick={() => factsMut.mutate({ id: s.id, enabled: !s.store_facts })}
+                >
+                  <Sparkles className="h-3 w-3" />
                 </Button>
                 <Button
                   variant="ghost"
