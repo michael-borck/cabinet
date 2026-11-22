@@ -15,10 +15,29 @@ from cabinet.extractors.base import ExtractionResult
 from cabinet.extractors.registry import EXTRACTOR_VERSION, get_extractor
 from cabinet.llm.base import LLMProvider
 from cabinet.llm.factory import create_provider
+from cabinet.services.embeddings import EmbeddingService, build_embedding_text
 from cabinet.services.facts import FACTS_VERSION, FactsService
 from cabinet.utils.cloud import is_cloud_placeholder
+from cabinet.utils.embeddings import pack_embedding
 
 logger = logging.getLogger(__name__)
+
+
+def _queue_embedding(
+    targets: list[tuple[object, str]],
+    fact: object,
+    service: EmbeddingService | None,
+) -> None:
+    """Queue *fact* for (re)embedding when its vector is stale or missing."""
+    if service is None or fact is None:
+        return
+    if ContentFactRepository.is_embedding_fresh(fact, model=service.model):
+        return
+    text = build_embedding_text(
+        getattr(fact, "summary", None), getattr(fact, "topics", None)
+    )
+    if text:
+        targets.append((fact, text))
 
 
 class PipelineService:
@@ -66,6 +85,12 @@ class PipelineService:
         )
         facts_enabled = bool(source and source.store_facts)
         provider = await self._get_active_provider()
+        embedding_provider = await self._get_active_provider("embedding")
+        embedding_service = (
+            EmbeddingService(embedding_provider, embedding_provider.model_name)
+            if embedding_provider is not None
+            else None
+        )
 
         # Determine which files to process ------------------------------------
         # "extracted" files are retried: their previous run failed or skipped
@@ -150,6 +175,7 @@ class PipelineService:
             extracted_batch: list[File] = []
             extracted_texts: dict[int, str] = {}
             facts_map: dict[int, object] = {}
+            embedding_targets: list[tuple[object, str]] = []
             for file in batch:
                 try:
                     extraction: ExtractionResult | None = None
@@ -160,7 +186,9 @@ class PipelineService:
                         fact = await self._fresh_fact(content_hash)
 
                     if fact is not None:
-                        # Fresh: no extraction, no facts LLM call.
+                        # Fresh: no extraction, no facts LLM call. A stale or
+                        # missing vector is rebuilt from the stored facts.
+                        _queue_embedding(embedding_targets, fact, embedding_service)
                         facts_map[file.id] = fact
                         await self._set_status(file, "extracted")
                         extracted_batch.append(file)
@@ -199,6 +227,7 @@ class PipelineService:
                         fact = await ContentFactRepository.get(
                             self._session, content_hash
                         )
+                        _queue_embedding(embedding_targets, fact, embedding_service)
                         facts_map[file.id] = fact
                         await self._set_status(file, "extracted")
                         extracted_batch.append(file)
@@ -217,6 +246,9 @@ class PipelineService:
                     _append_error_log(
                         job, f"[extract] file_id={file.id}: {exc}"
                     )
+
+            if embedding_service is not None and embedding_targets:
+                await self._apply_embeddings(embedding_targets, embedding_service)
 
             # Persist extraction/facts outcomes before the LLM call so a
             # categorization failure can't roll them back with its own writes.
@@ -303,10 +335,17 @@ class PipelineService:
     # Facts (Phase 2a)
     # ------------------------------------------------------------------
 
-    async def _get_active_provider(self) -> LLMProvider | None:
-        """Build the active provider once per run, or None when unconfigured."""
+    async def _get_active_provider(
+        self, kind: str = "chat"
+    ) -> LLMProvider | None:
+        """Build the active provider for *kind* once per run, or None."""
         result = await self._session.execute(
-            select(LLMConfig).where(LLMConfig.is_active == True)  # noqa: E712
+            select(LLMConfig)
+            .where(
+                LLMConfig.kind == kind,
+                LLMConfig.is_active == True,  # noqa: E712
+            )
+            .limit(1)
         )
         config = result.scalar_one_or_none()
         if config is None:
@@ -317,6 +356,33 @@ class PipelineService:
             api_key=config.api_key,
             base_url=config.base_url,
         )
+
+    async def _apply_embeddings(
+        self,
+        targets: list[tuple[object, str]],
+        service: EmbeddingService,
+    ) -> None:
+        """Embed a batch of facts and attach vectors to their rows.
+
+        Embeddings are an enhancement: a failure here is logged and leaves the
+        facts usable, rather than failing the documents.
+        """
+        try:
+            vectors = await service.embed_texts([text for _, text in targets])
+        except Exception:
+            logger.exception("Embedding batch failed; facts kept without vectors")
+            return
+
+        for (fact, _text), vector in zip(targets, vectors, strict=True):
+            if not vector:
+                continue
+            await ContentFactRepository.update_embedding(
+                self._session,
+                content_hash=fact.content_hash,  # type: ignore[attr-defined]
+                embedding=pack_embedding(vector),
+                model=service.model,
+                dim=len(vector),
+            )
 
     async def _content_hash(self, file: File) -> str | None:
         """The instance's mirrored hash, else its document's hash."""

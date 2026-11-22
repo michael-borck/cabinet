@@ -225,10 +225,20 @@ class LLMConfigCreate(BaseModel):
     base_url: str | None = None
 
 
+class EmbeddingConfigCreate(BaseModel):
+    """Separate embedding config (Anthropic chat has no embeddings API)."""
+
+    provider: str = "ollama"
+    model: str = "nomic-embed-text"
+    api_key: str | None = None
+    base_url: str | None = "http://localhost:11434/v1"
+
+
 class LLMConfigResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    kind: str = "chat"
     provider: str
     model: str
     base_url: str | None

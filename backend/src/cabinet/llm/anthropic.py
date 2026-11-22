@@ -37,6 +37,13 @@ class AnthropicProvider:
         text = await self.complete(system_prompt, user_prompt)
         return self._extract_json(text)
 
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Anthropic has no embeddings API; use a separate embedding config."""
+        raise NotImplementedError(
+            "Anthropic does not provide an embeddings API. Configure an "
+            "embedding provider such as local Ollama (nomic-embed-text)."
+        )
+
     async def test_connection(self) -> bool:
         """Test if the Anthropic API is reachable and the API key is valid."""
         try:

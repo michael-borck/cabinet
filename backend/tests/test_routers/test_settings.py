@@ -71,3 +71,70 @@ async def test_api_key_preserved_when_omitted(client: AsyncClient):
         "model": "claude-sonnet-4-20250514",
     })
     assert response.json()["api_key_set"] is False
+
+
+# ---------------------------------------------------------------------------
+# Embedding config (Phase 2b; D5: default local Ollama nomic-embed-text)
+# ---------------------------------------------------------------------------
+
+
+async def test_embedding_config_defaults_to_ollama(client: AsyncClient):
+    assert (await client.get("/api/v1/settings/embeddings")).json() is None
+
+    response = await client.put("/api/v1/settings/embeddings", json={})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "ollama"
+    assert body["model"] == "nomic-embed-text"
+    assert body["kind"] == "embedding"
+    assert body["is_active"] is True
+
+
+async def test_embedding_rejects_anthropic(client: AsyncClient):
+    response = await client.put(
+        "/api/v1/settings/embeddings",
+        json={"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+    )
+    assert response.status_code == 400
+    assert "embeddings" in response.json()["detail"].lower()
+
+
+async def test_chat_and_embedding_configs_are_independent(client: AsyncClient):
+    await client.put(
+        "/api/v1/settings/llm",
+        json={"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+    )
+    await client.put(
+        "/api/v1/settings/embeddings",
+        json={"provider": "ollama", "model": "nomic-embed-text"},
+    )
+
+    chat = await client.get("/api/v1/settings/llm")
+    embedding = await client.get("/api/v1/settings/embeddings")
+    assert chat.json()["provider"] == "anthropic"
+    assert embedding.json()["provider"] == "ollama"
+
+    # Re-saving chat must not deactivate the embedding config.
+    await client.put(
+        "/api/v1/settings/llm",
+        json={"provider": "openai", "model": "gpt-4o-mini"},
+    )
+    still = await client.get("/api/v1/settings/embeddings")
+    assert still.json() is not None
+    assert still.json()["provider"] == "ollama"
+
+
+async def test_embedding_api_key_preserved_when_omitted(client: AsyncClient):
+    await client.put(
+        "/api/v1/settings/embeddings",
+        json={
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "api_key": "secret",
+        },
+    )
+    response = await client.put(
+        "/api/v1/settings/embeddings",
+        json={"provider": "openai", "model": "text-embedding-3-large"},
+    )
+    assert response.json()["api_key_set"] is True

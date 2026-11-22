@@ -6,7 +6,7 @@ import { isAxiosError } from 'axios'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig } from '@/services/api'
+import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { toast } from 'sonner'
@@ -279,6 +279,92 @@ function LLMForm({ config }: { config: LLMConfig | null }) {
   )
 }
 
+function EmbeddingForm({ config }: { config: LLMConfig | null }) {
+  const qc = useQueryClient()
+  const [provider, setProvider] = useState(config?.provider || 'ollama')
+  const [model, setModel] = useState(config?.model || 'nomic-embed-text')
+  const [apiKey, setApiKey] = useState('')
+  const [baseUrl, setBaseUrl] = useState(config?.base_url || 'http://localhost:11434/v1')
+
+  const keyIsSaved = (config?.api_key_set ?? false) && provider === config?.provider
+
+  const saveMut = useMutation({
+    mutationFn: () => setEmbeddingConfig({ provider, model, api_key: apiKey || undefined, base_url: baseUrl || undefined }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.embeddingConfig })
+      toast.success('Embedding config saved')
+    },
+    onError: (err) => { toast.error(`Failed to save embedding config: ${errorDetail(err)}`) },
+  })
+  const testMut = useMutation({
+    mutationFn: () => testEmbeddingConfig({ provider, model, api_key: apiKey || undefined, base_url: baseUrl || undefined }),
+    onSuccess: (r: { success: boolean; message: string }) => {
+      r.success ? toast.success(r.message) : toast.error(r.message)
+    },
+    onError: (err) => { toast.error(`Embedding test failed: ${errorDetail(err)}`) },
+  })
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-medium">Embeddings (optional)</h3>
+        <p className="text-xs text-muted-foreground">
+          One vector per document for organisation and similar-file grouping. Anthropic has no
+          embeddings API, so it is configured separately — local Ollama with nomic-embed-text is
+          the default.
+        </p>
+      </div>
+      <div>
+        <label className="text-xs text-muted-foreground">Provider</label>
+        <select value={provider} onChange={(e) => setProvider(e.target.value)}
+          className="mt-1 flex h-10 w-full rounded-md border bg-background px-3 text-sm">
+          <option value="ollama">Ollama (Local)</option>
+          <option value="openai">OpenAI</option>
+          <option value="gemini">Google Gemini</option>
+        </select>
+      </div>
+      <div>
+        <label className="text-xs text-muted-foreground">Embedding model</label>
+        <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="nomic-embed-text" className="mt-1" />
+      </div>
+      <div>
+        <label className="text-xs text-muted-foreground">API Key</label>
+        <Input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={keyIsSaved ? '••••••••  (saved — leave blank to keep)' : 'optional for Ollama'}
+          className="mt-1"
+        />
+      </div>
+      {(provider === 'ollama' || provider === 'openai') && (
+        <div>
+          <label className="text-xs text-muted-foreground">Base URL</label>
+          <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://localhost:11434/v1" className="mt-1" />
+        </div>
+      )}
+      <div className="flex gap-2">
+        <Button size="sm" disabled={saveMut.isPending} onClick={() => saveMut.mutate()}>Save</Button>
+        <Button size="sm" variant="outline" disabled={testMut.isPending} onClick={() => testMut.mutate()}>
+          Test Embedding
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function EmbeddingSection() {
+  const { data: config, isPending, isError } = useQuery({ queryKey: queryKeys.embeddingConfig, queryFn: getEmbeddingConfig })
+
+  if (isPending) {
+    return <p className="text-sm text-muted-foreground">Loading embedding config…</p>
+  }
+  if (isError) {
+    return <p className="text-sm text-destructive">Failed to load embedding configuration.</p>
+  }
+  return <EmbeddingForm key={config ? `cfg-${config.id}` : 'new'} config={config ?? null} />
+}
+
 function LLMTab() {
   const { data: config, isPending, isError } = useQuery({ queryKey: queryKeys.llmConfig, queryFn: getLLMConfig })
 
@@ -294,7 +380,14 @@ function LLMTab() {
 
   // Key the form on the config identity so it re-initializes when a new
   // config is saved/loaded, while leaving in-progress edits alone otherwise.
-  return <LLMForm key={config ? `cfg-${config.id}` : 'new'} config={config ?? null} />
+  return (
+    <div className="space-y-6">
+      <LLMForm key={config ? `cfg-${config.id}` : 'new'} config={config ?? null} />
+      <div className="border-t pt-4">
+        <EmbeddingSection />
+      </div>
+    </div>
+  )
 }
 
 export function SettingsDialog() {

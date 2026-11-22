@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     func,
@@ -139,6 +140,11 @@ class ContentFact(Base):
     # Locators for the cited content (page/sheet counts, headings, sampled
     # segment offsets) so a fact can be traced back to the original.
     provenance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Phase 2b: one little-endian float32 vector per document (organisation,
+    # not RAG). Model + dim guard against silent config swaps.
+    embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
     char_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -372,6 +378,11 @@ class LLMConfig(Base):
     __tablename__ = "llm_configs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # "chat" (completion/categorisation/facts) or "embedding" (Phase 2b).
+    # They are configured independently: Anthropic chat has no embeddings API.
+    kind: Mapped[str] = mapped_column(
+        String, nullable=False, default="chat", server_default="chat"
+    )
     provider: Mapped[str] = mapped_column(String, nullable=False)
     model: Mapped[str] = mapped_column(String, nullable=False)
     api_key: Mapped[str | None] = mapped_column(String, nullable=True)

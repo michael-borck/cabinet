@@ -44,6 +44,13 @@ class GeminiProvider:
         text = response.text or "{}"
         return self._extract_json(text)
 
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts with a Gemini embedding model."""
+        response = await self.client.aio.models.embed_content(
+            model=self.model_name, contents=texts
+        )
+        return [list(embedding.values or []) for embedding in response.embeddings]
+
     async def test_connection(self) -> bool:
         """Test if the Gemini API is reachable and the API key is valid."""
         try:

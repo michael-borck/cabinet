@@ -83,7 +83,9 @@ Extracted text is held in memory during processing and raw text is never
 stored in the database. For folders with **Store AI facts** enabled (the
 default for newly added folders), Cabinet keeps a per-document AI summary,
 document type, entities, and topics so the file can be re-categorised later
-without re-reading it.
+without re-reading it. If an embedding model is configured (local Ollama
+`nomic-embed-text` by default), one vector per document is stored for
+organisation and similar-file grouping.
 
 ## License
 

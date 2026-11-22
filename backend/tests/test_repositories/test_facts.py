@@ -85,3 +85,42 @@ async def test_purge_unreferenced_keeps_referenced(
     assert removed == 1
     assert await ContentFactRepository.get(session, "sha256:keep") is not None
     assert await ContentFactRepository.get(session, "sha256:drop") is None
+
+
+async def test_update_embedding_and_freshness(session: AsyncSession):
+    from cabinet.utils.embeddings import pack_embedding
+
+    fact = await ContentFactRepository.upsert(
+        session,
+        content_hash="sha256:emb",
+        extractor_version="1",
+        facts_version=1,
+        summary="summary",
+    )
+    await session.commit()
+    assert not ContentFactRepository.is_embedding_fresh(fact, model="m")
+
+    await ContentFactRepository.update_embedding(
+        session,
+        content_hash="sha256:emb",
+        embedding=pack_embedding([1.0, 2.0]),
+        model="m",
+        dim=2,
+    )
+    await session.commit()
+
+    assert ContentFactRepository.is_embedding_fresh(fact, model="m")
+    assert ContentFactRepository.is_embedding_fresh(fact, model="m", dim=2)
+    assert not ContentFactRepository.is_embedding_fresh(fact, model="m", dim=3)
+    assert not ContentFactRepository.is_embedding_fresh(fact, model="other")
+
+    # Rebuilding the fact invalidates any previous vector.
+    await ContentFactRepository.upsert(
+        session,
+        content_hash="sha256:emb",
+        extractor_version="1",
+        facts_version=1,
+        summary="new summary",
+    )
+    assert fact.embedding is None
+    assert fact.embedding_model is None

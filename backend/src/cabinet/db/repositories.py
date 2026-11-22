@@ -383,6 +383,38 @@ class ContentFactRepository:
         fact.provenance = provenance
         fact.char_count = char_count
         fact.page_count = page_count
+        # Summary/topics may have changed, so any previous vector is stale.
+        fact.embedding = None
+        fact.embedding_model = None
+        fact.embedding_dim = None
+        await session.flush()
+        return fact
+
+    @staticmethod
+    def is_embedding_fresh(
+        fact: ContentFact | None, *, model: str, dim: int | None = None
+    ) -> bool:
+        """A vector is reusable only for the same model (and dim, if known)."""
+        if fact is None or not fact.embedding or fact.embedding_model != model:
+            return False
+        return dim is None or fact.embedding_dim == dim
+
+    @staticmethod
+    async def update_embedding(
+        session: AsyncSession,
+        *,
+        content_hash: str,
+        embedding: bytes,
+        model: str,
+        dim: int,
+    ) -> ContentFact | None:
+        """Attach/replace a document's vector without touching its facts."""
+        fact = await session.get(ContentFact, prefixed_hash(content_hash))
+        if fact is None:
+            return None
+        fact.embedding = embedding
+        fact.embedding_model = model
+        fact.embedding_dim = dim
         await session.flush()
         return fact
 
@@ -988,10 +1020,14 @@ class LLMConfigRepository:
     """CRUD operations for :class:`LLMConfig` rows."""
 
     @staticmethod
-    async def get_active(session: AsyncSession) -> LLMConfig | None:
-        """Return the currently active LLM configuration (if any)."""
+    async def get_active(
+        session: AsyncSession, kind: str = "chat"
+    ) -> LLMConfig | None:
+        """Return the active config for *kind* (``chat`` or ``embedding``)."""
         result = await session.execute(
-            select(LLMConfig).where(LLMConfig.is_active.is_(True)).limit(1)
+            select(LLMConfig)
+            .where(LLMConfig.kind == kind, LLMConfig.is_active.is_(True))
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
@@ -1012,21 +1048,26 @@ class LLMConfigRepository:
         base_url: str | None = None,
         is_active: bool = False,
         config_id: int | None = None,
+        kind: str = "chat",
     ) -> LLMConfig:
         """Create or update an LLM configuration.
 
-        If *is_active* is ``True``, all other configs are deactivated first.
-        If *config_id* is provided, the existing row is updated; otherwise a
+        If *is_active* is ``True``, other active configs of the same *kind*
+        are deactivated first (chat and embedding are independent). If
+        *config_id* is provided, the existing row is updated; otherwise a
         new row is inserted.
         """
         if is_active:
             await session.execute(
-                update(LLMConfig).values(is_active=False)
+                update(LLMConfig)
+                .where(LLMConfig.kind == kind)
+                .values(is_active=False)
             )
 
         if config_id is not None:
             config = await session.get(LLMConfig, config_id)
             if config is not None:
+                config.kind = kind
                 config.provider = provider
                 config.model = model
                 config.api_key = api_key
@@ -1036,6 +1077,7 @@ class LLMConfigRepository:
                 return config
 
         config = LLMConfig(
+            kind=kind,
             provider=provider,
             model=model,
             api_key=api_key,

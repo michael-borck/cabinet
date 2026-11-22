@@ -8,9 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cabinet.db.engine import get_session
 from cabinet.db.repositories import LLMConfigRepository
 from cabinet.llm.factory import create_provider
-from cabinet.schemas import LLMConfigCreate, LLMConfigResponse, LLMTestResult
+from cabinet.schemas import (
+    EmbeddingConfigCreate,
+    LLMConfigCreate,
+    LLMConfigResponse,
+    LLMTestResult,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+# Anthropic has no embeddings API (D5).
+_EMBEDDING_PROVIDERS = {"ollama", "openai", "gemini"}
 
 
 @router.get("/llm", response_model=LLMConfigResponse | None)
@@ -108,4 +116,117 @@ async def test_llm_connection(
     return LLMTestResult(
         success=False,
         message=f"Provider {provider_name}/{model} returned a negative test result.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Embedding configuration (Phase 2b)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/embeddings", response_model=LLMConfigResponse | None)
+async def get_embedding_config(session: AsyncSession = Depends(get_session)):
+    """Return the active embedding configuration, or ``null``."""
+    return await LLMConfigRepository.get_active(session, kind="embedding")
+
+
+@router.put(
+    "/embeddings",
+    response_model=LLMConfigResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def set_embedding_config(
+    body: EmbeddingConfigCreate,
+    session: AsyncSession = Depends(get_session),
+):
+    """Create or replace the active embedding configuration.
+
+    Anthropic is rejected: it has no embeddings API. A stored key is kept
+    when the provider is unchanged and none is supplied.
+    """
+    if body.provider.lower().strip() not in _EMBEDDING_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Provider has no embeddings API. Choose one of: "
+                + ", ".join(sorted(_EMBEDDING_PROVIDERS))
+            ),
+        )
+
+    api_key = body.api_key
+    if not api_key:
+        existing = await LLMConfigRepository.get_active(session, kind="embedding")
+        if existing is not None and existing.provider == body.provider:
+            api_key = existing.api_key
+
+    return await LLMConfigRepository.save(
+        session,
+        provider=body.provider,
+        model=body.model,
+        api_key=api_key,
+        base_url=body.base_url,
+        is_active=True,
+        kind="embedding",
+    )
+
+
+@router.post("/embeddings/test", response_model=LLMTestResult)
+async def test_embedding_connection(
+    body: EmbeddingConfigCreate | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Test an embedding config by embedding a short string.
+
+    Uses the embedding endpoint rather than ``test_connection`` (which is a
+    chat call an embedding-only model cannot answer).
+    """
+    stored = await LLMConfigRepository.get_active(session, kind="embedding")
+
+    if body is not None:
+        provider_name = body.provider
+        model = body.model
+        base_url = body.base_url
+        api_key = body.api_key
+        if not api_key and stored is not None and stored.provider == body.provider:
+            api_key = stored.api_key
+    elif stored is not None:
+        provider_name = stored.provider
+        model = stored.model
+        base_url = stored.base_url
+        api_key = stored.api_key
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No embedding configuration to test. Supply one in the "
+            "request body or set one via PUT /settings/embeddings.",
+        )
+
+    if provider_name.lower().strip() not in _EMBEDDING_PROVIDERS:
+        return LLMTestResult(
+            success=False,
+            message=f"Provider {provider_name!r} has no embeddings API.",
+        )
+
+    try:
+        provider = create_provider(
+            provider=provider_name,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+        )
+        vectors = await provider.embed(["connection test"])
+    except Exception as exc:
+        return LLMTestResult(success=False, message=f"Embedding failed: {exc}")
+
+    if not vectors or not vectors[0]:
+        return LLMTestResult(
+            success=False,
+            message=f"Provider {provider_name}/{model} returned no vector.",
+        )
+    return LLMTestResult(
+        success=True,
+        message=(
+            f"Embedded successfully with {provider_name}/{model} "
+            f"(dim={len(vectors[0])})."
+        ),
     )

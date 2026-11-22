@@ -6,4 +6,5 @@ export const queryKeys = {
   jobs: ['jobs'] as const,
   job: (id: number) => ['job', id] as const,
   llmConfig: ['llmConfig'] as const,
+  embeddingConfig: ['embeddingConfig'] as const,
 }

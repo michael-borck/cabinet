@@ -64,4 +64,10 @@ export const setLLMConfig = (data: { provider: string; model: string; api_key?: 
 export const testLLMConfig = (data: { provider: string; model: string; api_key?: string; base_url?: string }) =>
   api.post('/settings/llm/test', data).then(r => r.data)
 
+export const getEmbeddingConfig = () => api.get('/settings/embeddings').then(r => r.data)
+export const setEmbeddingConfig = (data: { provider: string; model: string; api_key?: string; base_url?: string }) =>
+  api.put('/settings/embeddings', data).then(r => r.data)
+export const testEmbeddingConfig = (data: { provider: string; model: string; api_key?: string; base_url?: string }) =>
+  api.post('/settings/embeddings/test', data).then(r => r.data)
+
 export default api

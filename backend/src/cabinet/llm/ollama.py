@@ -48,6 +48,13 @@ class OllamaProvider:
         text = response.choices[0].message.content or "{}"
         return self._extract_json(text)
 
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts with an Ollama embedding model (e.g. nomic-embed-text)."""
+        response = await self.client.embeddings.create(
+            model=self.model_name, input=texts
+        )
+        return [list(item.embedding) for item in response.data]
+
     async def test_connection(self) -> bool:
         """Test if the Ollama server is reachable."""
         try:

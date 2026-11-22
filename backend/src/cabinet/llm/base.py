@@ -18,6 +18,14 @@ class LLMProvider(Protocol):
         """Get a JSON completion. Parses the response as JSON."""
         ...
 
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed *texts* as document-level vectors (Phase 2b).
+
+        Providers without an embeddings API (Anthropic) raise
+        ``NotImplementedError``; embedding configs never select them.
+        """
+        ...
+
     async def test_connection(self) -> bool:
         """Test if the provider is reachable and the API key is valid."""
         ...

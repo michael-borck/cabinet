@@ -1,8 +1,8 @@
 # Design: Phase 1 (content identity + folder watching) and Phase 2 (facts cache)
 
 - **Status:** Draft for review — Phase 1a/1b and Phase 2a implemented;
-  Phase 2b in progress (server-side search done).
-  Decisions D1–D4 and D7 settled 2026-11-22 (§7); D5–D6 remain open
+  Phase 2b in progress (server-side search + embeddings done).
+  Decisions D1–D5 and D7 settled 2026-11-22 (§7); D6 remains open
 - **Date:** 2026-11-22
 - **Scope:** Phase 1a content-based file identity, Phase 1b folder watching,
   Phase 2 per-content facts cache (summary / entities / embeddings / optional
@@ -450,6 +450,19 @@ milliseconds, and a separate vector store would add a heavy, hard-to-bundle
 dependency to an Electron+PyInstaller app while breaking the single-file
 local-database story.
 
+**Implemented (2b embeddings).** `LLMConfig` gained a `kind` (`chat` |
+`embedding`), so chat and embedding providers are configured independently
+(D5). Embedding models are embedded from `summary + topics` only — not the
+raw opening text — so a vector can be rebuilt from an existing fact without
+re-extraction and stays stable across runs. Vectors are little-endian
+float32 BLOBs on `content_facts` with `embedding_model`/`embedding_dim`; a
+model change invalidates only the vector, which is recomputed from stored
+facts. Embedding failure is non-fatal: facts and categorisation proceed.
+`utils/embeddings.py` provides pack/unpack plus brute-force cosine. The
+Settings LLM tab exposes the separate embedding config, defaulting to local
+Ollama `nomic-embed-text`; Anthropic is rejected there because it has no
+embeddings API.
+
 ### 5.3 Search (minimal, enabling only)
 
 This phase does not redesign search, but facts make two cheap wins possible
@@ -576,16 +589,16 @@ DB before first run of a 1a build (the migration should do this itself).
   unhashed placeholders get the instance-only `deferred` status and are
   never hashed or extracted, hydration re-queues them, and the API reports
   `cloud_placeholder` availability (§4.2, §4.4).
+- **D5 — Embedding provider for Anthropic configs.** Separate embedding
+  config (`LLMConfig.kind = "embedding"`), defaulting to local Ollama
+  `nomic-embed-text`; OpenAI and Gemini are also supported. Anthropic is
+  rejected for embeddings because it has no embeddings API. Chat and
+  embedding configs are independent, so an Anthropic chat setup works with
+  local embeddings (§5.2). Vectors are document-level *organisation* data,
+  not a RAG/vector-database commitment.
 
 ### Still open
 
-- **D5 — Embedding provider for Anthropic configs.** Anthropic has no
-  embeddings API, so 2b needs an embedding source for Anthropic users:
-  separate embedding config defaulting to local Ollama (proposed, §5.2), a
-  second cloud key, or deferring 2b embeddings for Anthropic-only users.
-  Note the embeddings in question are document-level *organisation* vectors
-  in SQLite, not a RAG/vector-database commitment (§5.2 scope guard).
-  Blocks 2b only.
 - **D6 — Tombstone retention.** `missing` instances and orphaned
   documents/facts are retained so moved-away-and-back files and unplugged
   drives restore with curation intact; they are hidden from normal browsing

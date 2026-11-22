@@ -264,6 +264,11 @@ _ADDED_COLUMNS = [
     ("files", "is_placeholder", "BOOLEAN NOT NULL DEFAULT 0"),
     # Phase 2a: Tier 1 facts storage (D3). Existing/migrated sources opt in.
     ("sources", "store_facts", "BOOLEAN NOT NULL DEFAULT 0"),
+    # Phase 2b: separate embedding configs and per-document vectors.
+    ("llm_configs", "kind", "VARCHAR NOT NULL DEFAULT 'chat'"),
+    ("content_facts", "embedding", "BLOB"),
+    ("content_facts", "embedding_model", "VARCHAR"),
+    ("content_facts", "embedding_dim", "INTEGER"),
 ]
 
 

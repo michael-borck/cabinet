@@ -305,8 +305,8 @@ async def _add_hashed_file(session, source, tmp_path, name, digest):
 
 
 def _patch_facts_run(monkeypatch, provider, extractions):
-    async def fake_provider(self):
-        return provider
+    async def fake_provider(self, kind="chat"):
+        return provider if kind == "chat" else None
 
     async def fake_extract(self, file):
         extractions.append(file.id)
@@ -412,3 +412,107 @@ async def test_store_facts_off_keeps_ephemeral_path(
     assert extractions == [file.id]
     await session.refresh(doc)
     assert doc.status == "categorized"
+
+
+class _EmbeddingProvider:
+    """Fake embedding provider with a settable model name."""
+
+    def __init__(self, model_name: str = "test-embed", fail: bool = False) -> None:
+        self.model_name = model_name
+        self.fail = fail
+        self.embed_calls = 0
+        self.texts: list[str] = []
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.embed_calls += 1
+        if self.fail:
+            raise RuntimeError("embed boom")
+        self.texts.extend(texts)
+        return [[1.0, 2.0, 3.0] for _ in texts]
+
+
+async def _with_embeddings(
+    session, tmp_path, monkeypatch, embed_provider: _EmbeddingProvider
+):
+    source = await _make_source(session, tmp_path)
+    file, doc = await _add_hashed_file(
+        session, source, tmp_path, "a.txt", "sha256:emb"
+    )
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    chat = _FactsProvider()
+    extractions: list[int] = []
+
+    async def fake_provider(self, kind="chat"):
+        return embed_provider if kind == "embedding" else chat
+
+    async def fake_extract(self, f):
+        extractions.append(f.id)
+        return ExtractionResult(text="content", metadata={}, char_count=7)
+
+    monkeypatch.setattr(PipelineService, "_get_active_provider", fake_provider)
+    monkeypatch.setattr(PipelineService, "_extract_file", fake_extract)
+    return file, doc, job, chat, extractions
+
+
+async def test_embedding_built_then_rebuilt_only_on_model_change(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    from cabinet.utils.embeddings import unpack_embedding
+
+    embed = _EmbeddingProvider()
+    file, _doc, job, chat, extractions = await _with_embeddings(
+        session, tmp_path, monkeypatch, embed
+    )
+    pipeline = PipelineService(session)
+
+    await pipeline.process_pending_files(job.id)
+    fact = await ContentFactRepository.get(session, "sha256:emb")
+    assert fact is not None
+    assert fact.embedding is not None
+    assert fact.embedding_model == "test-embed"
+    assert fact.embedding_dim == 3
+    assert unpack_embedding(fact.embedding) == [1.0, 2.0, 3.0]
+    assert embed.embed_calls == 1
+    assert chat.facts_calls == 1
+    assert extractions == [file.id]
+
+    # Fresh fact + fresh vector: nothing recomputed.
+    await pipeline.process_pending_files(job.id)
+    assert embed.embed_calls == 1
+    assert chat.facts_calls == 1
+    assert extractions == [file.id]
+
+    # A model change invalidates only the vector; facts/extraction are reused.
+    embed.model_name = "test-embed-v2"
+    await pipeline.process_pending_files(job.id)
+    assert embed.embed_calls == 2
+    assert chat.facts_calls == 1
+    assert extractions == [file.id]
+    fact = await ContentFactRepository.get(session, "sha256:emb")
+    assert fact is not None and fact.embedding_model == "test-embed-v2"
+
+
+async def test_embedding_failure_keeps_facts_and_categorisation(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    embed = _EmbeddingProvider(fail=True)
+    file, doc, job, _chat, _extractions = await _with_embeddings(
+        session, tmp_path, monkeypatch, embed
+    )
+
+    async def fake_categorize(self, files, extracted_texts, **kwargs):
+        return {f.id for f in files}
+
+    monkeypatch.setattr(PipelineService, "_categorize_batch", fake_categorize)
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    fact = await ContentFactRepository.get(session, "sha256:emb")
+    assert fact is not None and fact.summary == "A summary."
+    assert fact.embedding is None
+    await session.refresh(doc)
+    assert doc.status == "categorized"  # embeddings are an enhancement
+    assert embed.embed_calls == 1
