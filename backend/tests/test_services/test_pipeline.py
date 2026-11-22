@@ -200,3 +200,46 @@ async def test_failed_batch_does_not_abort_run(
     # Failed batch keeps its extraction result and will retry next run;
     # the following batch categorized normally.
     assert statuses == ["extracted", "categorized"]
+
+
+async def test_placeholder_is_parked_not_extracted(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    """A file that dehydrates before processing is deferred, never read."""
+    import cabinet.services.pipeline as pipeline_module
+
+    _, job, file = await _setup(session, tmp_path)
+
+    monkeypatch.setattr(
+        pipeline_module, "is_cloud_placeholder", lambda path, **kw: True
+    )
+    extracted: list[int] = []
+
+    async def fake_extract(self, f):
+        extracted.append(f.id)
+        return None
+
+    monkeypatch.setattr(PipelineService, "_extract_file", fake_extract)
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    await session.refresh(file)
+    assert file.is_placeholder is True
+    assert file.status == "deferred"
+    assert extracted == []
+
+
+async def test_flagged_placeholder_is_not_selected(
+    session: AsyncSession, tmp_path
+):
+    """Instances already known to be dataless are not even queued."""
+    _, job, file = await _setup(session, tmp_path)
+    file.is_placeholder = True
+    await session.commit()
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    await session.refresh(file)
+    await session.refresh(job)
+    assert file.status == "pending"  # untouched, not queued
+    assert job.total_files == 0

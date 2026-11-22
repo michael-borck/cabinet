@@ -202,12 +202,10 @@ async def get_category_files(
                     size_bytes=detailed.size_bytes,
                     mime_type=detailed.mime_type,
                     status=detailed.status,
-                    availability=(
-                        "missing"
-                        if detailed.status == "missing"
-                        else "available"
-                        if source_available.get(detailed.source_id, True)
-                        else "source_unavailable"
+                    availability=detailed.availability_state(
+                        source_available=source_available.get(
+                            detailed.source_id, True
+                        )
                     ),
                     file_modified_at=detailed.file_modified_at,
                     created_at=detailed.created_at,

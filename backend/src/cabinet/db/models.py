@@ -149,6 +149,13 @@ class File(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     mime_type: Mapped[str | None] = mapped_column(String, nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Cloud placeholder (iCloud/OneDrive dataless file, design §4.2/D4):
+    # recorded from the scan's stat so reads never open the file. Only the
+    # derived availability state is exposed; the flag itself is an internal
+    # detection cache.
+    is_placeholder: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     file_modified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -168,6 +175,21 @@ class File(Base):
     categories: Mapped[list[FileCategory]] = relationship(
         "FileCategory", back_populates="file", cascade="all, delete-orphan"
     )
+
+    def availability_state(self, *, source_available: bool = True) -> str:
+        """Derived instance availability (design §4.4), never persisted.
+
+        ``source_unavailable`` outranks ``cloud_placeholder`` because a
+        vanished drive hides whether the file was dataless; ``missing``
+        (the one persisted instance state) outranks both.
+        """
+        if self.status == "missing":
+            return "missing"
+        if not source_available:
+            return "source_unavailable"
+        if self.is_placeholder:
+            return "cloud_placeholder"
+        return "available"
 
     def __repr__(self) -> str:
         return f"<File id={self.id} filename={self.filename!r}>"

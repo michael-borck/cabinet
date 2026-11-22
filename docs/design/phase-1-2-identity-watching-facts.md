@@ -1,7 +1,7 @@
 # Design: Phase 1 (content identity + folder watching) and Phase 2 (facts cache)
 
-- **Status:** Draft for review — no code written against this yet.
-  Decisions D1, D2, D3, D7 settled 2026-11-22 (§7); D4–D6 remain open
+- **Status:** Draft for review — Phase 1a/1b implemented.
+  Decisions D1–D4 and D7 settled 2026-11-22 (§7); D5–D6 remain open
 - **Date:** 2026-11-22
 - **Scope:** Phase 1a content-based file identity, Phase 1b folder watching,
   Phase 2 per-content facts cache (summary / entities / embeddings / optional
@@ -287,8 +287,13 @@ every external rename into paid LLM work.
   events. Detected placeholders get instance availability
   `cloud_placeholder` (§4.4): shown with a cloud badge, hashing/extraction
   deferred until the file is hydrated or the user explicitly opens or
-  processes it. Reliably *detecting* placeholder state per platform remains
-  an open question (§7, D4).
+  processes it. **Resolved (D4):** detection is a metadata-only `stat` —
+  macOS `SF_DATALESS` in `st_flags`, Windows `FILE_ATTRIBUTE_OFFLINE` /
+  `RECALL_ON_OPEN` / `RECALL_ON_DATA_ACCESS` in `st_file_attributes`
+  (`utils/cloud.py`). The scan caches the flag on the instance; the scanner
+  and pipeline both park placeholders in an instance-only `deferred` status
+  and never read their bytes. Linux/BSD expose no portable marker and
+  report "not a placeholder" rather than guessing.
 
 ### 4.3 Safety nets (correctness without events)
 
@@ -326,10 +331,10 @@ Watcher events are lossy by nature, so convergence cannot depend on them:
 - **Instance availability** is reported separately from pipeline `status`
   (which lives on the document after §3.1): `available`,
   `source_unavailable`, `cloud_placeholder`, `missing`. Only `missing` is
-  persisted as a state change by reconcile; the rest are derived from
-  source state + placeholder detection at read time, so an unplugged drive
-  never writes thousands of row updates. Same greyed visual language for
-  disconnected and cloud files, different underlying cause.
+  persisted as a state change by reconcile; the rest are derived at read
+  time from source state plus the placeholder flag the scan records, so an
+  unplugged drive never writes thousands of row updates. Same greyed visual
+  language for disconnected and cloud files, different underlying cause.
 
 ### 4.5 Acceptance criteria
 
@@ -554,16 +559,18 @@ DB before first run of a 1a build (the migration should do this itself).
   source note). Removable sources additionally record volume identity +
   relative path and degrade to an honest "unavailable" state when
   disconnected (§4.4) — never mass-missing.
+- **D4 — Cloud placeholders.** Detect with a metadata-only `stat` before
+  any read: macOS `SF_DATALESS` (`st_flags`), Windows `FILE_ATTRIBUTE_OFFLINE`
+  / `RECALL_ON_OPEN` / `RECALL_ON_DATA_ACCESS` (`st_file_attributes`).
+  Linux/BSD have no portable marker, so they report "not a placeholder"
+  rather than guessing (no zero-block heuristic — it false-positives on
+  sparse and network filesystems). The scan caches `files.is_placeholder`;
+  unhashed placeholders get the instance-only `deferred` status and are
+  never hashed or extracted, hydration re-queues them, and the API reports
+  `cloud_placeholder` availability (§4.2, §4.4).
 
 ### Still open
 
-- **D4 — Cloud placeholders.** How to detect iCloud/OneDrive dataless files
-  per platform before hashing (macOS: `SF_DATALESS`/brctl heuristics are
-  messy; Windows: `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` is cleaner).
-  V1 may ship with "hashing can trigger downloads" documented + a
-  per-source "don't hash large files automatically" size cap instead.
-  Display/defer behaviour once detected is settled (§4.2, §4.4); only
-  detection is open. Does not block 1a.
 - **D5 — Embedding provider for Anthropic configs.** Anthropic has no
   embeddings API, so 2b needs an embedding source for Anthropic users:
   separate embedding config defaulting to local Ollama (proposed, §5.2), a

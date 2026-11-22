@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from cabinet.db.repositories import DocumentRepository
 from cabinet.extractors.base import ExtractionResult
 from cabinet.extractors.registry import get_extractor
 from cabinet.llm.factory import create_provider
+from cabinet.utils.cloud import is_cloud_placeholder
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,8 @@ class PipelineService:
             .where(
                 File.source_id == job.source_id,
                 File.status.in_(("pending", "extracted")),
+                # Cloud placeholders are deferred, not queued (design §4.2/D4).
+                File.is_placeholder == False,  # noqa: E712
             )
             .order_by(File.id)
         )
@@ -116,6 +120,16 @@ class PipelineService:
                 batch_documents.add(file.document_id)  # type: ignore[arg-type]
                 deduped.append(file)
             batch = deduped
+
+            # -- Cloud-placeholder guard --------------------------------------
+            # A file can dehydrate between the scan and this run; reading it
+            # would silently download it. Park such instances instead.
+            runnable: list[File] = []
+            for file in batch:
+                if await self._park_if_placeholder(file):
+                    continue
+                runnable.append(file)
+            batch = runnable
 
             # -- Extraction ---------------------------------------------------
             extracted_batch: list[File] = []
@@ -219,6 +233,24 @@ class PipelineService:
     # ------------------------------------------------------------------
     # Extraction
     # ------------------------------------------------------------------
+
+    async def _park_if_placeholder(self, file: File) -> bool:
+        """Return True and defer *file* when its bytes are cloud-only.
+
+        Uses metadata only (no read), so it cannot trigger a download. A
+        failed stat falls through to extraction, which reports the real
+        error; only an explicit placeholder flag parks the file.
+        """
+        try:
+            st = os.stat(file.path)
+        except OSError:
+            return False
+        placeholder = is_cloud_placeholder(file.path, st=st)
+        file.is_placeholder = placeholder
+        if not placeholder:
+            return False
+        file.status = "deferred"
+        return True
 
     async def _extract_file(self, file: File) -> ExtractionResult | None:
         """Extract text from a single file.

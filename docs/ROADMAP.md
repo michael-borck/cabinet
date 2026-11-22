@@ -12,7 +12,7 @@ only inside Cabinet. Phases are sequential slices, each shippable alone.
 | Phase | Theme | Status | Design |
 |---|---|---|---|
 | 1a | Content-based identity: document/instance split (one document per hash, many path instances), inode+hash move detection, filesystem capability ladder | **Implemented** (backend) | [Phase 1+2 design §3](design/phase-1-2-identity-watching-facts.md) |
-| 1b | Folder watching (debounced reconcile, launch/periodic safety nets, removable-drive "unavailable" state + volume rebinding, cloud-placeholder deferral) | **Implemented** (backend + minimal UI; cloud-placeholder deferral still open, D4) | [Phase 1+2 design §4](design/phase-1-2-identity-watching-facts.md) |
+| 1b | Folder watching (debounced reconcile, launch/periodic safety nets, removable-drive "unavailable" state + volume rebinding, cloud-placeholder deferral) | **Implemented** (backend + UI; placeholder detection on macOS/Windows) | [Phase 1+2 design §4](design/phase-1-2-identity-watching-facts.md) |
 | 2a | Facts cache (Tier 1): per-document summary / entities / topics / provenance locators, fuzzy fingerprint | Designed, not started | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
 | 2b | Document-level embeddings (organisation, not RAG; SQLite, no vector DB), server-side search, opt-in Tier 2 full-text (FTS) index, near-duplicate/version clusters | Designed, not started | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
 | 3 | Concept governance (below): canonical concepts + aliases/synonyms, provisional concepts, consolidation pass, learning from manual corrections | Discussed (notes below), needs its own design doc | — |
@@ -28,9 +28,10 @@ facts on for new sources, Tier 2 full-text opt-in, Tier 3 RAG chunking out
 of scope; facts carry page/sheet provenance and originals open in their own
 tool); D7 filesystem capability ladder (corroborated inode on APFS/NTFS/ext4,
 hash-on-change on FAT/exFAT) plus volume-identity rebinding and an honest
-"unavailable" state for disconnected drives. Still open, none blocking 1a:
-D4 cloud-placeholder *detection*, D5 embedding provider for Anthropic
-configs (blocks 2b only), D6 tombstone retention/GC period.
+"unavailable" state for disconnected drives; D4 cloud-placeholder detection
+via `SF_DATALESS`/Windows recall attributes, with implicit reads deferred.
+Still open: D5 embedding provider for Anthropic configs (blocks 2b only),
+D6 tombstone retention/GC period.
 
 ### Independent backlog (no phase dependency)
 

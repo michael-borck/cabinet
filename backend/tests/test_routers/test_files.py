@@ -83,3 +83,51 @@ async def test_assign_new_category_is_manual(client: AsyncClient, session: Async
         )
     ).scalar_one()
     assert dc.is_manual is True
+
+
+def test_availability_precedence():
+    """missing > source_unavailable > cloud_placeholder > available."""
+    cloud_file = File(
+        source_id=1,
+        path="/x",
+        filename="x",
+        size_bytes=1,
+        status="deferred",
+        is_placeholder=True,
+    )
+    assert cloud_file.availability_state() == "cloud_placeholder"
+    assert cloud_file.availability_state(source_available=False) == "source_unavailable"
+
+    missing = File(
+        source_id=1,
+        path="/x",
+        filename="x",
+        size_bytes=1,
+        status="missing",
+        is_placeholder=True,
+    )
+    assert missing.availability_state() == "missing"
+    assert missing.availability_state(source_available=False) == "missing"
+
+
+async def test_cloud_placeholder_reported_over_api(
+    client: AsyncClient, session: AsyncSession, tmp_path
+):
+    source = Source(path=str(tmp_path), recursive=True)
+    session.add(source)
+    await session.flush()
+    file = File(
+        source_id=source.id,
+        path=str(tmp_path / "cloud.pdf"),
+        filename="cloud.pdf",
+        extension=".pdf",
+        size_bytes=10,
+        status="deferred",
+        is_placeholder=True,
+    )
+    session.add(file)
+    await session.commit()
+
+    resp = await client.get(f"/api/v1/files/{file.id}")
+    assert resp.status_code == 200
+    assert resp.json()["availability"] == "cloud_placeholder"

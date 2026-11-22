@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { AlertTriangle, FileIcon, MoreHorizontal } from 'lucide-react'
+import { AlertTriangle, Cloud, FileIcon, MoreHorizontal } from 'lucide-react'
 import { useAllFiles } from '@/hooks/useFiles'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { cn } from '@/lib/utils'
@@ -96,6 +96,11 @@ export function FileTable() {
                   )}
                   {file.availability === 'source_unavailable' && (
                     <span className="text-xs text-muted-foreground">(drive not connected)</span>
+                  )}
+                  {file.availability === 'cloud_placeholder' && (
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Cloud className="h-3 w-3" /> (in cloud)
+                    </span>
                   )}
                   {file.availability === 'missing' && (
                     <span className="text-xs text-muted-foreground">(missing)</span>

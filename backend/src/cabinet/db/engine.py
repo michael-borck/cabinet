@@ -260,6 +260,8 @@ _ADDED_COLUMNS = [
     ("sources", "volume_id", "VARCHAR"),
     ("sources", "volume_rel_path", "VARCHAR"),
     ("jobs", "trigger", "VARCHAR NOT NULL DEFAULT 'manual'"),
+    # Phase 1b: cloud-placeholder detection cache (D4).
+    ("files", "is_placeholder", "BOOLEAN NOT NULL DEFAULT 0"),
 ]
 
 

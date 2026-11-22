@@ -307,7 +307,8 @@ class DocumentRepository:
     ) -> None:
         """Set a document's status and mirror it to live instances.
 
-        ``missing`` instances keep their instance-only state.
+        ``missing`` (path gone) and ``deferred`` (cloud placeholder awaiting
+        hydration) are instance-only states and keep their value.
         """
         document.status = status
         instances = (
@@ -316,7 +317,7 @@ class DocumentRepository:
             )
         ).scalars().all()
         for inst in instances:
-            if inst.status != "missing":
+            if inst.status not in ("missing", "deferred"):
                 inst.status = status
 
 

@@ -105,6 +105,19 @@ export function FileDetailsPanel() {
     )
   }
 
+  // A cloud placeholder is reachable (opening it hydrates the file); only a
+  // missing path or a disconnected drive makes the file unreachable.
+  const unreachable =
+    file.availability === 'missing' || file.availability === 'source_unavailable'
+  const availabilityLabel =
+    file.availability === 'missing'
+      ? 'Missing'
+      : file.availability === 'source_unavailable'
+        ? 'Drive not connected'
+        : file.availability === 'cloud_placeholder'
+          ? 'In the cloud (not downloaded)'
+          : null
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-2">
@@ -129,20 +142,20 @@ export function FileDetailsPanel() {
               <span className="text-muted-foreground">Status</span>
               <span>{file.status}</span>
             </div>
-            {file.availability && file.availability !== 'available' && (
+            {availabilityLabel && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Availability</span>
-                <span>{file.availability === 'missing' ? 'Missing' : 'Drive not connected'}</span>
+                <span>{availabilityLabel}</span>
               </div>
             )}
           </div>
 
           {/* Actions */}
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={file.availability !== undefined && file.availability !== 'available'} title={file.availability !== undefined && file.availability !== 'available' ? 'File is not currently reachable' : undefined} onClick={() => window.api.revealInFinder(file.path)}>
+            <Button variant="outline" size="sm" disabled={unreachable} title={unreachable ? 'File is not currently reachable' : undefined} onClick={() => window.api.revealInFinder(file.path)}>
               <FolderOpen className="mr-1 h-3 w-3" /> Reveal
             </Button>
-            <Button variant="outline" size="sm" disabled={file.availability !== undefined && file.availability !== 'available'} title={file.availability !== undefined && file.availability !== 'available' ? 'File is not currently reachable' : undefined} onClick={() => window.api.openFile(file.path)}>
+            <Button variant="outline" size="sm" disabled={unreachable} title={unreachable ? 'File is not currently reachable' : undefined} onClick={() => window.api.openFile(file.path)}>
               <ExternalLink className="mr-1 h-3 w-3" /> Open
             </Button>
           </div>

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.db.models import Document, File, Job, Source
 from cabinet.db.repositories import DocumentRepository
+from cabinet.utils.cloud import is_cloud_placeholder
 from cabinet.utils.hashing import compute_file_hash, hashes_equal, prefixed_hash
 
 logger = logging.getLogger(__name__)
@@ -284,6 +285,12 @@ class ScannerService:
         if mode == "full_reindex":
             for db_file in existing_files:
                 if db_file.path in found_paths:
+                    info = found_by_path[db_file.path]
+                    db_file.is_placeholder = info.get("is_placeholder", False)
+                    if info.get("is_placeholder"):
+                        # A reindex must not download cloud placeholders.
+                        await self._defer_placeholder(db_file)
+                        continue
                     await DocumentRepository.ensure_for_file(self._session, db_file)
                     db_file.status = "pending"
                     doc = await self._session.get(Document, db_file.document_id)
@@ -300,6 +307,7 @@ class ScannerService:
             # rename detection for legacy rows that predate the columns.
             db_file.device_id = info.get("device_id")
             db_file.inode = info.get("inode")
+            db_file.is_placeholder = info.get("is_placeholder", False)
             if mode == "full_reindex":
                 continue
 
@@ -309,24 +317,40 @@ class ScannerService:
                 fs_mtime is not None and fs_mtime != db_file.file_modified_at
             )
 
+            if db_file.is_placeholder:
+                # Hashing/extraction would force a download. Keep any known
+                # content identity; an unhashed placeholder waits in
+                # "deferred" until it is hydrated.
+                if db_file.content_hash is None:
+                    await self._defer_placeholder(db_file)
+                    if was_missing:
+                        counts["changed"] += 1
+                elif was_missing:
+                    db_file.status = await self._document_status(db_file)
+                    counts["changed"] += 1
+                continue
+
             if not mtime_changed and db_file.content_hash is not None:
                 # Fast path (unchanged): just guarantee document linkage.
+                # A hydrated placeholder parked in "deferred" re-joins the
+                # document's status now that its bytes are local again.
                 await DocumentRepository.ensure_for_file(self._session, db_file)
-                if was_missing:
+                if was_missing or db_file.status == "deferred":
                     db_file.status = await self._document_status(db_file)
                     counts["changed"] += 1
                 continue
 
             if not mtime_changed and db_file.content_hash is None:
-                # Lazy hash backfill for pre-1a rows. Attaching the hash may
-                # merge this file's provisional document into a known one;
-                # status is left alone unless it was missing.
+                # Lazy hash backfill for pre-1a rows and hydrated placeholders.
+                # Attaching the hash may merge this file's provisional document
+                # into a known one; status is left alone unless it was missing
+                # or parked as deferred.
                 digest = await self._hash_file(path)
                 if digest is not None:
                     await DocumentRepository.attach_hash(
                         self._session, db_file, digest
                     )
-                if was_missing:
+                if was_missing or db_file.status == "deferred":
                     db_file.status = await self._document_status(db_file)
                     counts["changed"] += 1
                 continue
@@ -363,10 +387,32 @@ class ScannerService:
             moved = self._inode_move_candidate(unmatched, live_ids, info)
             if moved is not None:
                 self._apply_sighting(moved, info)
-                if moved.status == "missing":
+                if info.get("is_placeholder"):
+                    await self._defer_placeholder(moved)
+                elif moved.status == "missing":
                     moved.status = await self._document_status(moved)
                 live_ids.add(moved.id)
                 counts["moved"] += 1
+                continue
+
+            if info.get("is_placeholder"):
+                # New dataless file: record it without reading a byte.
+                new_file = File(
+                    source_id=source_id,
+                    path=info["path"],
+                    filename=info["filename"],
+                    extension=info["extension"],
+                    size_bytes=info["size_bytes"],
+                    file_modified_at=info["file_modified_at"],
+                    device_id=info.get("device_id"),
+                    inode=info.get("inode"),
+                    is_placeholder=True,
+                )
+                self._session.add(new_file)
+                await self._session.flush()
+                await self._defer_placeholder(new_file)
+                live_ids.add(new_file.id)
+                counts["new"] += 1
                 continue
 
             digest = await self._hash_file(path)
@@ -410,6 +456,7 @@ class ScannerService:
                 file_modified_at=info["file_modified_at"],
                 device_id=info.get("device_id"),
                 inode=info.get("inode"),
+                is_placeholder=False,
                 status="pending",
             )
             self._session.add(new_file)
@@ -474,6 +521,21 @@ class ScannerService:
         file.file_modified_at = info["file_modified_at"]
         file.device_id = info.get("device_id")
         file.inode = info.get("inode")
+        file.is_placeholder = info.get("is_placeholder", False)
+
+    async def _defer_placeholder(self, file: File) -> None:
+        """Park a dataless instance without reading it (design §4.2/D4).
+
+        An unhashed placeholder gets the instance-only ``deferred`` status
+        so the pipeline never selects it; a placeholder that already sights
+        a document mirrors that document's status (availability is reported
+        separately as ``cloud_placeholder``).
+        """
+        doc = await DocumentRepository.ensure_for_file(self._session, file)
+        if doc.content_hash is None:
+            file.status = "deferred"
+        else:
+            file.status = doc.status
 
     async def _document_status(self, file: File) -> str:
         """The status a restored instance should mirror."""
@@ -513,6 +575,9 @@ def _file_info(full_path: str, filename: str) -> dict[str, Any] | None:
         # filesystems, which the reconcile corroboration handles (§3.3).
         "device_id": stat.st_dev,
         "inode": stat.st_ino or None,
+        # Metadata-only cloud-placeholder probe (design §4.2/D4): no read,
+        # so it can never trigger an implicit download.
+        "is_placeholder": is_cloud_placeholder(full_path, st=stat),
         # Naive UTC: the DateTime columns are timezone-less, and an aware
         # value never compares equal to the naive one read back from the DB,
         # which made every sync rehash every file.

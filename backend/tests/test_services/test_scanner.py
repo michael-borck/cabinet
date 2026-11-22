@@ -353,3 +353,113 @@ async def test_scan_reuses_caller_job(session: AsyncSession, tmp_path):
 
     result = await session.execute(select(Job))
     assert len(result.scalars().all()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Cloud placeholders (Phase 1b, design §4.2/D4)
+# ---------------------------------------------------------------------------
+
+async def test_placeholder_is_deferred_without_hashing(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    """A dataless file is catalogued but never read (no download trigger)."""
+    import cabinet.services.scanner as scanner_module
+
+    (tmp_path / "cloud.pdf").write_bytes(b"%PDF not actually local")
+    source = await _make_source(session, str(tmp_path))
+
+    monkeypatch.setattr(
+        scanner_module, "is_cloud_placeholder", lambda path, **kw: True
+    )
+    hashed: list[str] = []
+
+    async def fake_hash(path: str) -> str:
+        hashed.append(path)
+        return "deadbeef"
+
+    monkeypatch.setattr(scanner_module, "compute_file_hash", fake_hash)
+
+    job = await ScannerService(session).scan_source(source.id)
+    assert job.status == "completed"
+
+    file = (await session.execute(select(File))).scalar_one()
+    assert file.is_placeholder is True
+    assert file.status == "deferred"
+    assert file.content_hash is None
+    doc = await session.get(Document, file.document_id)
+    assert doc is not None and doc.content_hash is None
+    assert hashed == []  # bytes were never read
+
+
+async def test_hydrated_placeholder_rejoins_pipeline(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    """Once bytes are local again, the file is hashed and queued."""
+    import os
+    import time
+
+    import cabinet.services.scanner as scanner_module
+
+    target = tmp_path / "cloud.pdf"
+    target.write_bytes(b"real content")
+    source = await _make_source(session, str(tmp_path))
+    state = {"placeholder": True}
+    monkeypatch.setattr(
+        scanner_module,
+        "is_cloud_placeholder",
+        lambda path, **kw: state["placeholder"],
+    )
+
+    scanner = ScannerService(session)
+    await scanner.scan_source(source.id)
+    file = (await session.execute(select(File))).scalar_one()
+    assert file.status == "deferred"
+
+    state["placeholder"] = False
+    future = time.time() + 10
+    os.utime(target, (future, future))
+
+    await scanner.scan_source(source.id)
+    await session.refresh(file)
+    assert file.is_placeholder is False
+    assert file.status == "pending"
+    assert file.content_hash is not None
+
+
+async def test_hashed_file_keeps_identity_when_evicted(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    """Eviction must not discard a known hash or its document status."""
+    import os
+    import time
+
+    import cabinet.services.scanner as scanner_module
+
+    target = tmp_path / "report.txt"
+    target.write_text("v1")
+    source = await _make_source(session, str(tmp_path))
+    state = {"placeholder": False}
+    monkeypatch.setattr(
+        scanner_module,
+        "is_cloud_placeholder",
+        lambda path, **kw: state["placeholder"],
+    )
+
+    scanner = ScannerService(session)
+    await scanner.scan_source(source.id)
+    file = (await session.execute(select(File))).scalar_one()
+    original_hash = file.content_hash
+    file.status = "categorized"
+    doc = await session.get(Document, file.document_id)
+    doc.status = "categorized"
+    await session.flush()
+
+    state["placeholder"] = True
+    future = time.time() + 10
+    os.utime(target, (future, future))
+
+    await scanner.scan_source(source.id)
+    await session.refresh(file)
+    assert file.is_placeholder is True
+    assert file.content_hash == original_hash
+    assert file.status == "categorized"  # status still mirrors the document

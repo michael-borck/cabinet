@@ -32,12 +32,7 @@ def _build_file_response(file, *, source_available: bool = True) -> FileResponse
     plus any per-instance additions (see ``effective_categories``).
     ``availability`` is derived at read time (design §4.4).
     """
-    if file.status == "missing":
-        availability = "missing"
-    elif not source_available:
-        availability = "source_unavailable"
-    else:
-        availability = "available"
+    availability = file.availability_state(source_available=source_available)
     cats: list[CategoryBrief] = [
         CategoryBrief(
             id=category.id,

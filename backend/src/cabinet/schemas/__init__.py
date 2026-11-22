@@ -133,7 +133,8 @@ class FileResponse(BaseModel):
     size_bytes: int
     mime_type: str | None
     status: str
-    # "available" | "source_unavailable" | "missing" (derived, design §4.4).
+    # "available" | "source_unavailable" | "cloud_placeholder" | "missing"
+    # (derived at read time, design §4.4).
     availability: str = "available"
     file_modified_at: datetime | None
     created_at: datetime
