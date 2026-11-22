@@ -156,8 +156,11 @@ async def scan_source(
         job_type=body.mode,
         source_id=source_id,
     )
-    # Flush so the job id is available before the background task starts.
-    await session.flush()
+    # Commit before scheduling: the background task opens its own session,
+    # and dependency teardown (which would normally commit) runs after the
+    # background task in FastAPI. Without this, the task cannot see the job
+    # and fails with "Job not found".
+    await session.commit()
 
     background_tasks.add_task(_run_scan_and_pipeline, source_id, body.mode, job.id)
 

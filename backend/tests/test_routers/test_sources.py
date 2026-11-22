@@ -6,7 +6,7 @@ import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cabinet.db.models import Job
+from cabinet.db.models import Job, Source
 
 
 @pytest_asyncio.fixture
@@ -244,3 +244,34 @@ async def test_disable_store_text_index_purges_unreferenced_text(
 
     session.expire_all()
     assert not await TextIndexRepository.has(session, "sha256:text1")
+
+
+async def test_scan_commits_job_before_background_task(
+    session: AsyncSession, engine, test_dir: str
+):
+    """Regression: the scan task opens a new session; the job must be visible.
+
+    Dependency teardown runs after the background task on a real server, so
+    the endpoint has to commit the job row itself before scheduling.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from starlette.background import BackgroundTasks
+
+    from cabinet.routers.sources import scan_source
+    from cabinet.schemas import ScanRequest
+
+    source = Source(path=test_dir, recursive=True)
+    session.add(source)
+    await session.commit()
+
+    job = await scan_source(
+        source.id,
+        ScanRequest(mode="quick_sync"),
+        BackgroundTasks(),
+        session,
+    )
+
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as other:
+        seen = await other.get(Job, job.id)
+        assert seen is not None
