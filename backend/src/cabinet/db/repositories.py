@@ -20,6 +20,8 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from cabinet.db.models import (
     Category,
+    CategoryAlias,
+    CategoryExample,
     ContentFact,
     Document,
     DocumentCategory,
@@ -29,6 +31,7 @@ from cabinet.db.models import (
     LLMConfig,
     Source,
 )
+from cabinet.utils.concepts import normalize_concept
 from cabinet.utils.fingerprint import fingerprint_similarity, stem_key
 from cabinet.utils.hashing import prefixed_hash
 from cabinet.utils.volumes import describe_source_root
@@ -882,7 +885,12 @@ class CategoryRepository:
         list containing its sub-categories (recursively).
         """
         result = await session.execute(
-            select(Category).order_by(Category.name)
+            select(Category)
+            .options(
+                selectinload(Category.aliases),
+                selectinload(Category.examples),
+            )
+            .order_by(Category.name)
         )
         all_cats: Sequence[Category] = result.scalars().all()
 
@@ -894,6 +902,12 @@ class CategoryRepository:
                 "name": cat.name,
                 "slug": cat.slug,
                 "parent_id": cat.parent_id,
+                "definition": cat.definition,
+                "status": cat.status,
+                "origin": cat.origin,
+                "merged_into_id": cat.merged_into_id,
+                "aliases": [alias.alias for alias in cat.aliases],
+                "example_count": len(cat.examples),
                 "description": cat.description,
                 "color": cat.color,
                 "is_ai_suggested": cat.is_ai_suggested,
@@ -920,7 +934,14 @@ class CategoryRepository:
         file itself (negative key) while it has no document yet.
         """
         cats = (
-            await session.execute(select(Category).order_by(Category.name))
+            await session.execute(
+                select(Category)
+                .options(
+                    selectinload(Category.aliases),
+                    selectinload(Category.examples),
+                )
+                .order_by(Category.name)
+            )
         ).scalars().all()
 
         keys: dict[int, set[int]] = {cat.id: set() for cat in cats}
@@ -953,9 +974,166 @@ class CategoryRepository:
         return await session.get(Category, category_id)
 
     @staticmethod
+    async def get_with_relations(
+        session: AsyncSession, category_id: int
+    ) -> Category | None:
+        result = await session.execute(
+            select(Category)
+            .options(
+                selectinload(Category.aliases),
+                selectinload(Category.examples),
+            )
+            .where(Category.id == category_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def get_by_slug(session: AsyncSession, slug: str) -> Category | None:
         result = await session.execute(select(Category).where(Category.slug == slug))
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def list_all(session: AsyncSession) -> Sequence[Category]:
+        """All concepts with aliases/examples eager-loaded (Phase 3)."""
+        result = await session.execute(
+            select(Category)
+            .options(
+                selectinload(Category.aliases),
+                selectinload(Category.examples),
+            )
+            .order_by(Category.name)
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_by_normalized_alias(
+        session: AsyncSession, normalized: str
+    ) -> Category | None:
+        result = await session.execute(
+            select(Category)
+            .join(CategoryAlias, CategoryAlias.category_id == Category.id)
+            .options(selectinload(Category.aliases))
+            .where(CategoryAlias.normalized == normalized)
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def add_alias(
+        session: AsyncSession,
+        category_id: int,
+        alias: str,
+        *,
+        source: str = "ai",
+    ) -> CategoryAlias | None:
+        """Attach a synonym, enforcing global uniqueness (D9).
+
+        Raises:
+            ValueError: when the normalized alias belongs to another concept
+                or shadows another concept's canonical name.
+        """
+        normalized = normalize_concept(alias)
+        if not normalized:
+            return None
+        category = await session.get(Category, category_id)
+        if category is None:
+            return None
+
+        existing = (
+            await session.execute(
+                select(CategoryAlias).where(
+                    CategoryAlias.normalized == normalized
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.category_id == category_id:
+                return existing
+            raise ValueError(
+                f"Alias {alias!r} already refers to another category"
+            )
+
+        # Canonical names reserve their normalized form too.
+        categories = (await session.execute(select(Category))).scalars().all()
+        for other in categories:
+            if other.id != category_id and normalize_concept(other.name) == normalized:
+                raise ValueError(
+                    f"Alias {alias!r} conflicts with category {other.name!r}"
+                )
+
+        row = CategoryAlias(
+            category_id=category_id,
+            alias=alias.strip(),
+            normalized=normalized,
+            source=source,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    @staticmethod
+    async def delete_alias(
+        session: AsyncSession, category_id: int, alias_id: int
+    ) -> bool:
+        alias = await session.get(CategoryAlias, alias_id)
+        if alias is None or alias.category_id != category_id:
+            return False
+        await session.delete(alias)
+        await session.flush()
+        return True
+
+    @staticmethod
+    async def add_example(
+        session: AsyncSession,
+        category_id: int,
+        *,
+        filename: str,
+        content_hash: str | None = None,
+        summary_snippet: str | None = None,
+        source: str = "ai",
+    ) -> CategoryExample | None:
+        """Record a document as an example of *category_id* (learning loop)."""
+        if await session.get(Category, category_id) is None:
+            return None
+        if content_hash is not None:
+            existing = (
+                await session.execute(
+                    select(CategoryExample).where(
+                        CategoryExample.category_id == category_id,
+                        CategoryExample.content_hash == content_hash,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return existing
+        example = CategoryExample(
+            category_id=category_id,
+            content_hash=content_hash,
+            filename=filename,
+            summary_snippet=summary_snippet,
+            source=source,
+        )
+        session.add(example)
+        await session.flush()
+        return example
+
+    @staticmethod
+    async def set_embedding(
+        session: AsyncSession,
+        category_id: int,
+        *,
+        embedding: bytes,
+        model: str,
+        dim: int,
+    ) -> Category | None:
+        category = await session.get(Category, category_id)
+        if category is None:
+            return None
+        category.embedding = embedding
+        category.embedding_model = model
+        category.embedding_dim = dim
+        await session.flush()
+        return category
 
     @staticmethod
     async def create(
@@ -967,6 +1145,9 @@ class CategoryRepository:
         description: str | None = None,
         color: str | None = None,
         is_ai_suggested: bool = False,
+        definition: str | None = None,
+        status: str = "approved",
+        origin: str = "manual",
     ) -> Category:
         if slug is None:
             slug = _slugify(name)
@@ -977,6 +1158,9 @@ class CategoryRepository:
             description=description,
             color=color,
             is_ai_suggested=is_ai_suggested,
+            definition=definition,
+            status=status,
+            origin=origin,
         )
         session.add(category)
         await session.flush()

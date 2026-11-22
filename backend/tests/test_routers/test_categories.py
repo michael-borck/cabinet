@@ -64,3 +64,57 @@ async def test_get_categories_flat_format(client: AsyncClient):
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
+
+
+async def test_create_category_with_definition_and_governance_fields(
+    client: AsyncClient,
+):
+    response = await client.post(
+        "/api/v1/categories",
+        json={"name": "Billing", "definition": "Invoices and receipts"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["definition"] == "Invoices and receipts"
+    assert data["status"] == "approved"
+    assert data["origin"] == "manual"
+    assert data["aliases"] == []
+    assert data["example_count"] == 0
+
+
+async def test_category_alias_crud_and_conflict(client: AsyncClient):
+    billing = (
+        await client.post("/api/v1/categories", json={"name": "Billing"})
+    ).json()
+    finance = (
+        await client.post("/api/v1/categories", json={"name": "Finance"})
+    ).json()
+
+    created = await client.post(
+        f"/api/v1/categories/{billing['id']}/aliases",
+        json={"alias": "Invoices"},
+    )
+    assert created.status_code == 201
+    alias = created.json()
+    assert alias["alias"] == "Invoices"
+    assert alias["normalized"] == "invoice"
+
+    listed = await client.get("/api/v1/categories")
+    row = next(c for c in listed.json() if c["id"] == billing["id"])
+    assert row["aliases"] == ["Invoices"]
+
+    conflict = await client.post(
+        f"/api/v1/categories/{finance['id']}/aliases",
+        json={"alias": "Invoices"},
+    )
+    assert conflict.status_code == 409
+
+    deleted = await client.delete(
+        f"/api/v1/categories/{billing['id']}/aliases/{alias['id']}"
+    )
+    assert deleted.status_code == 204
+    assert (
+        await client.delete(
+            f"/api/v1/categories/{billing['id']}/aliases/{alias['id']}"
+        )
+    ).status_code == 404

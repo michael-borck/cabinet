@@ -269,17 +269,48 @@ class Category(Base):
     parent_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
     )
+    # Phase 3 concept governance (design §3.1). Existing rows migrate to
+    # status=approved, origin=legacy; AI-created names start provisional.
+    definition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="approved", server_default="approved"
+    )
+    merged_into_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+    )
+    origin: Mapped[str] = mapped_column(
+        String, nullable=False, default="manual", server_default="legacy"
+    )
+    embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
     description: Mapped[str | None] = mapped_column(String, nullable=True)
     color: Mapped[str | None] = mapped_column(String, nullable=True)
     is_ai_suggested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
-
-    parent: Mapped[Category | None] = relationship(
-        "Category", remote_side=[id], back_populates="children"
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, onupdate=func.now()
     )
-    children: Mapped[list[Category]] = relationship("Category", back_populates="parent")
+
+    # Two self-referencing FKs (parent + merged_into) require explicit
+    # foreign_keys so SQLAlchemy doesn't treat the relationship as ambiguous.
+    parent: Mapped[Category | None] = relationship(
+        "Category",
+        remote_side=[id],
+        back_populates="children",
+        foreign_keys=[parent_id],
+    )
+    children: Mapped[list[Category]] = relationship(
+        "Category", back_populates="parent", foreign_keys=[parent_id]
+    )
+    aliases: Mapped[list[CategoryAlias]] = relationship(
+        "CategoryAlias", back_populates="category", cascade="all, delete-orphan"
+    )
+    examples: Mapped[list[CategoryExample]] = relationship(
+        "CategoryExample", back_populates="category", cascade="all, delete-orphan"
+    )
     file_categories: Mapped[list[FileCategory]] = relationship(
         "FileCategory", back_populates="category", cascade="all, delete-orphan"
     )
@@ -289,6 +320,71 @@ class Category(Base):
 
     def __repr__(self) -> str:
         return f"<Category id={self.id} slug={self.slug!r}>"
+
+
+class CategoryAlias(Base):
+    """A synonym that resolves to one canonical concept (Phase 3, D9).
+
+    ``normalized`` is globally unique, so one string can never mean two
+    concepts; conflicts go to the review inbox instead of auto-resolving.
+    """
+
+    __tablename__ = "category_aliases"
+    __table_args__ = (
+        Index("ix_category_aliases_normalized", "normalized", unique=True),
+        Index("ix_category_aliases_category_id", "category_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False
+    )
+    alias: Mapped[str] = mapped_column(String, nullable=False)
+    normalized: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String, nullable=False, default="ai", server_default="ai"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+    category: Mapped[Category] = relationship(
+        "Category", back_populates="aliases"
+    )
+
+    def __repr__(self) -> str:
+        return f"<CategoryAlias id={self.id} alias={self.alias!r}>"
+
+
+class CategoryExample(Base):
+    """A document that exemplifies a concept (Phase 3 learning loop)."""
+
+    __tablename__ = "category_examples"
+    __table_args__ = (
+        Index("ix_category_examples_category_id", "category_id"),
+        Index("ix_category_examples_content_hash", "content_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False
+    )
+    content_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    summary_snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(
+        String, nullable=False, default="ai", server_default="ai"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+    category: Mapped[Category] = relationship(
+        "Category", back_populates="examples"
+    )
+
+    def __repr__(self) -> str:
+        return f"<CategoryExample id={self.id} filename={self.filename!r}>"
 
 
 class FileCategory(Base):

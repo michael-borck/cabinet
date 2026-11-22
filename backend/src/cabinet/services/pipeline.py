@@ -291,6 +291,7 @@ class PipelineService:
                         extracted_texts,
                         facts_map=facts_map,
                         provider=provider,
+                        embedding_service=embedding_service,
                     )
                 except Exception as exc:
                     logger.exception(
@@ -565,6 +566,7 @@ class PipelineService:
         *,
         facts_map: dict[int, object] | None = None,
         provider: LLMProvider | None = None,
+        embedding_service: EmbeddingService | None = None,
     ) -> set[int] | None:
         """Categorize a batch of files using the active LLM config.
 
@@ -582,7 +584,9 @@ class PipelineService:
         # Import here to avoid a module cycle with CategorizationService.
         from cabinet.services.categorization import CategorizationService
 
-        categorizer = CategorizationService(self._session, provider)
+        categorizer = CategorizationService(
+            self._session, provider, embedding_service=embedding_service
+        )
         return await categorizer.categorize_files(
             files, extracted_texts=extracted_texts, facts=facts_map
         )

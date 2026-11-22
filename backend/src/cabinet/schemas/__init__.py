@@ -97,6 +97,7 @@ class CategoryCreate(BaseModel):
     name: str
     parent_id: int | None = None
     color: str | None = None
+    definition: str | None = None
 
 
 class CategoryUpdate(BaseModel):
@@ -104,6 +105,20 @@ class CategoryUpdate(BaseModel):
     parent_id: int | None = None
     color: str | None = None
     description: str | None = None
+    definition: str | None = None
+
+
+class CategoryAliasCreate(BaseModel):
+    alias: str
+
+
+class CategoryAliasResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    alias: str
+    normalized: str
+    source: str
 
 
 class CategoryResponse(BaseModel):
@@ -113,6 +128,13 @@ class CategoryResponse(BaseModel):
     name: str
     slug: str
     parent_id: int | None
+    definition: str | None = None
+    # Phase 3 governance: approved | provisional | merged.
+    status: str = "approved"
+    origin: str = "manual"
+    merged_into_id: int | None = None
+    aliases: list[str] = []
+    example_count: int = 0
     description: str | None
     color: str | None
     is_ai_suggested: bool

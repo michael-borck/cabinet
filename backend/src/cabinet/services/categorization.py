@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cabinet.db.models import Category, DocumentCategory, File, FileCategory
 from cabinet.db.repositories import DocumentRepository
 from cabinet.llm.base import LLMProvider
-from cabinet.utils.text import make_slug, truncate_text
+from cabinet.services.concepts import ConceptResolver
+from cabinet.services.embeddings import EmbeddingService
+from cabinet.utils.text import truncate_text
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +23,15 @@ _FILE_TEXT_PREVIEW_CHARS = 2000
 class CategorizationService:
     """Categorises files by sending their metadata + text to an LLM."""
 
-    def __init__(self, session: AsyncSession, provider: LLMProvider) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        provider: LLMProvider,
+        embedding_service: EmbeddingService | None = None,
+    ) -> None:
         self._session = session
         self._provider = provider
+        self._resolver = ConceptResolver(session, embedding_service)
 
     # ------------------------------------------------------------------
     # Public API
@@ -324,29 +332,10 @@ class CategorizationService:
         parent: Category | None = None
 
         for part_name in parts:
-            slug = make_slug(part_name)
-
-            # Try to find an existing category with this slug + parent --------
-            query = select(Category).where(Category.slug == slug)
-            if parent is not None:
-                query = query.where(Category.parent_id == parent.id)
-            else:
-                query = query.where(Category.parent_id == None)  # noqa: E711
-
-            result = await self._session.execute(query)
-            category = result.scalar_one_or_none()
-
-            if category is None:
-                category = Category(
-                    name=part_name,
-                    slug=slug,
-                    parent_id=parent.id if parent else None,
-                    is_ai_suggested=True,
-                )
-                self._session.add(category)
-                await self._session.flush()  # populate category.id
-                logger.info("Created new category: %s (slug=%s)", part_name, slug)
-
+            # Phase 3a: slug -> alias -> stemmed -> embedding -> provisional.
+            category = await self._resolver.resolve(
+                part_name, parent_id=parent.id if parent else None
+            )
             parent = category
 
         assert parent is not None  # at least one part was processed

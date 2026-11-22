@@ -1,6 +1,7 @@
 # Design: Phase 3 — Taxonomy governance
 
-- **Status:** Draft for review — no code written against this yet.
+- **Status:** 3a implemented (schema, aliases, provisional concepts,
+  resolution order, concept-embedding backfill); 3b–3d pending.
 - **Date:** 2026-11-23
 - **Scope:** Govern the *vocabulary* of the category tree: stable concepts,
   aliases, provisional concepts, a human review inbox, consolidation, and a
@@ -125,6 +126,15 @@ is re-read.
 
 Embeddings reuse the Phase 2b embedding config. Without one, steps 1–3
 still work; step 4 is skipped and new names become provisional directly.
+
+**Implemented (3a).** `categories` gained `definition`, `status`, `origin`,
+`merged_into_id`, and concept-embedding columns; `category_aliases`
+(global unique `normalized`, D9) and `category_examples` exist. The
+`ConceptResolver` implements the full order above, follows `merged_into`
+links, creates provisional concepts, and lazily backfills concept
+embeddings with the Phase 2b config. `categorize_files` resolves each path
+segment through it. Alias add/delete endpoints and the new fields are in the
+category API; the review inbox and consolidation are 3b/3c.
 
 ## 5. Assignment flow
 

@@ -299,6 +299,15 @@ _ADDED_COLUMNS = [
     ("content_facts", "fingerprint", "VARCHAR"),
     # Phase 2b: opt-in Tier 2 full-text index.
     ("sources", "store_text_index", "BOOLEAN NOT NULL DEFAULT 0"),
+    # Phase 3a: categories become governed concepts.
+    ("categories", "definition", "TEXT"),
+    ("categories", "status", "VARCHAR NOT NULL DEFAULT 'approved'"),
+    ("categories", "merged_into_id", "INTEGER"),
+    ("categories", "origin", "VARCHAR NOT NULL DEFAULT 'legacy'"),
+    ("categories", "embedding", "BLOB"),
+    ("categories", "embedding_model", "VARCHAR"),
+    ("categories", "embedding_dim", "INTEGER"),
+    ("categories", "updated_at", "DATETIME"),
 ]
 
 

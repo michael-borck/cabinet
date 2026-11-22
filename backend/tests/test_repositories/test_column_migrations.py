@@ -121,3 +121,44 @@ async def test_migrate_documents_moves_assignments_and_is_idempotent():
             assert kept == 1
     finally:
         await engine.dispose()
+
+
+async def test_add_missing_columns_upgrades_legacy_categories_table():
+    """Phase 3a: existing categories become approved/legacy concepts."""
+    engine = create_async_engine("sqlite+aiosqlite://")
+    try:
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(
+                "CREATE TABLE categories ("
+                "id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, "
+                "slug VARCHAR NOT NULL, parent_id INTEGER, description VARCHAR, "
+                "color VARCHAR, is_ai_suggested BOOLEAN NOT NULL, "
+                "created_at DATETIME NOT NULL)"
+            )
+            await conn.exec_driver_sql(
+                "INSERT INTO categories (name, slug, is_ai_suggested, created_at) "
+                "VALUES ('Finance', 'finance', 0, '2026-01-01')"
+            )
+
+            await _add_missing_columns(conn)
+
+            cols = await _column_names(conn, "categories")
+            assert {
+                "definition",
+                "status",
+                "origin",
+                "merged_into_id",
+                "embedding",
+                "embedding_model",
+                "embedding_dim",
+                "updated_at",
+            } <= cols
+            row = (
+                await conn.exec_driver_sql(
+                    "SELECT status, origin FROM categories"
+                )
+            ).one()
+            assert row[0] == "approved"
+            assert row[1] == "legacy"
+    finally:
+        await engine.dispose()

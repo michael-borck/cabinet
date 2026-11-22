@@ -13,6 +13,8 @@ from cabinet.db.repositories import (
     effective_categories,
 )
 from cabinet.schemas import (
+    CategoryAliasCreate,
+    CategoryAliasResponse,
     CategoryBrief,
     CategoryCreate,
     CategoryResponse,
@@ -23,6 +25,41 @@ from cabinet.schemas import (
 )
 
 router = APIRouter(prefix="/categories", tags=["categories"])
+
+
+def _category_response(
+    category,
+    *,
+    file_count: int = 0,
+    aliases: list[str] | None = None,
+    example_count: int | None = None,
+) -> CategoryResponse:
+    """Build a response including Phase 3 governance fields."""
+    return CategoryResponse(
+        id=category.id,
+        name=category.name,
+        slug=category.slug,
+        parent_id=category.parent_id,
+        definition=category.definition,
+        status=category.status,
+        origin=category.origin,
+        merged_into_id=category.merged_into_id,
+        aliases=(
+            aliases
+            if aliases is not None
+            else [alias.alias for alias in category.aliases]
+        ),
+        example_count=(
+            example_count
+            if example_count is not None
+            else len(category.examples)
+        ),
+        description=category.description,
+        color=category.color,
+        is_ai_suggested=category.is_ai_suggested,
+        file_count=file_count,
+        created_at=category.created_at,
+    )
 
 
 @router.get("")
@@ -41,18 +78,9 @@ async def list_categories(
     rows = await CategoryRepository.get_flat_with_counts(session)
     results: list[CategoryResponse] = []
     for row in rows:
-        cat = row["category"]
         results.append(
-            CategoryResponse(
-                id=cat.id,
-                name=cat.name,
-                slug=cat.slug,
-                parent_id=cat.parent_id,
-                description=cat.description,
-                color=cat.color,
-                is_ai_suggested=cat.is_ai_suggested,
-                file_count=row["file_count"],
-                created_at=cat.created_at,
+            _category_response(
+                row["category"], file_count=row["file_count"]
             )
         )
     return results
@@ -77,19 +105,11 @@ async def create_category(
         name=body.name,
         parent_id=body.parent_id,
         color=body.color,
+        definition=body.definition,
+        origin="manual",
     )
 
-    return CategoryResponse(
-        id=category.id,
-        name=category.name,
-        slug=category.slug,
-        parent_id=category.parent_id,
-        description=category.description,
-        color=category.color,
-        is_ai_suggested=category.is_ai_suggested,
-        file_count=0,
-        created_at=category.created_at,
-    )
+    return _category_response(category, aliases=[], example_count=0)
 
 
 @router.patch("/{category_id}", response_model=CategoryResponse)
@@ -119,25 +139,21 @@ async def update_category(
             detail=f"Category {category_id} not found",
         )
 
-    # Fetch file count for the response.
+    # Fetch file count and relationship state for the response.
     rows = await CategoryRepository.get_flat_with_counts(session)
-    file_count = 0
-    for row in rows:
-        if row["category"].id == category_id:
-            file_count = row["file_count"]
-            break
-
-    return CategoryResponse(
-        id=category.id,
-        name=category.name,
-        slug=category.slug,
-        parent_id=category.parent_id,
-        description=category.description,
-        color=category.color,
-        is_ai_suggested=category.is_ai_suggested,
-        file_count=file_count,
-        created_at=category.created_at,
+    file_count = next(
+        (
+            row["file_count"]
+            for row in rows
+            if row["category"].id == category_id
+        ),
+        0,
     )
+    detailed = (
+        await CategoryRepository.get_with_relations(session, category_id)
+        or category
+    )
+    return _category_response(detailed, file_count=file_count)
 
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -151,6 +167,55 @@ async def delete_category(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Category {category_id} not found",
+        )
+
+
+@router.post(
+    "/{category_id}/aliases",
+    response_model=CategoryAliasResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_category_alias(
+    category_id: int,
+    body: CategoryAliasCreate,
+    session: AsyncSession = Depends(get_session),
+):
+    """Attach a synonym to a concept (Phase 3)."""
+    if not body.alias.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Alias must not be empty",
+        )
+    try:
+        alias = await CategoryRepository.add_alias(
+            session, category_id, body.alias, source="manual"
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    if alias is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Category {category_id} not found",
+        )
+    return alias
+
+
+@router.delete(
+    "/{category_id}/aliases/{alias_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_category_alias(
+    category_id: int,
+    alias_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Remove a synonym from a concept."""
+    if not await CategoryRepository.delete_alias(session, category_id, alias_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Alias not found for this category",
         )
 
 
