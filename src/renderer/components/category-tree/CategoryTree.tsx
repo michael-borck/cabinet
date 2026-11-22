@@ -249,6 +249,12 @@ export function CategoryTree() {
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
                   onClick={() => setSelectedView(view.id)}
                 >
+                  {view.color && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: view.color }}
+                    />
+                  )}
                   {view.pinned ? (
                     <Pin className="h-3 w-3 shrink-0 text-primary" />
                   ) : (

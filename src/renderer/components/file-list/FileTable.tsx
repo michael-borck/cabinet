@@ -1,15 +1,22 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Cloud, FileIcon, FolderPlus, MoreHorizontal, Settings } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAllFiles, useViewFiles } from '@/hooks/useFiles'
-import { useViews } from '@/hooks/useViews'
+import { useViewFacets, useViewGroups, useViews } from '@/hooks/useViews'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useViewBuilderStore } from '@/stores/viewBuilderStore'
 import { Button } from '@/components/ui/button'
-import { createSource, getLLMConfig, getSources, type SavedView } from '@/services/api'
+import {
+  createSource,
+  getLLMConfig,
+  getSources,
+  type SavedView,
+  type ViewFacets,
+  type ViewGroupBy,
+} from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 import { cn } from '@/lib/utils'
 
@@ -69,6 +76,43 @@ function ViewChips({ view, onEdit }: { view: SavedView; onEdit: () => void }) {
   )
 }
 
+function FacetSummary({ facets }: { facets: ViewFacets }) {
+  const sections = [
+    { label: 'Types', values: facets.doc_types },
+    { label: 'Topics', values: facets.topics },
+    {
+      label: 'Sources',
+      values: facets.sources.map((source) => ({
+        value: source.label,
+        count: source.count,
+      })),
+    },
+    { label: 'Months', values: facets.months },
+  ].filter((section) => section.values.length > 0)
+
+  if (sections.length === 0) return null
+
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+      {sections.map((section) => (
+        <span
+          key={section.label}
+          className="truncate"
+          title={section.values
+            .map((value) => `${value.value} (${value.count})`)
+            .join(', ')}
+        >
+          <span className="font-medium text-foreground/70">{section.label}:</span>{' '}
+          {section.values
+            .slice(0, 6)
+            .map((value) => `${value.value} (${value.count})`)
+            .join(', ')}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 export function FileTable() {
   const { selectedCategoryId, selectedViewId } = useSelectionStore()
   const { selectedFileId, setSelectedFile } = useSelectionStore()
@@ -89,6 +133,14 @@ export function FileTable() {
   const { data: llm } = useQuery({ queryKey: queryKeys.llmConfig, queryFn: getLLMConfig })
 
   const activeView = (views ?? []).find((view: SavedView) => view.id === selectedViewId)
+
+  const [groupBy, setGroupBy] = useState<ViewGroupBy>('none')
+  useEffect(() => {
+    setGroupBy((activeView?.query?.group_by as ViewGroupBy) ?? 'none')
+  }, [activeView])
+
+  const { data: facets } = useViewFacets(selectedViewId)
+  const { data: groups } = useViewGroups(selectedViewId, groupBy)
 
   const addSource = useMutation({
     mutationFn: async () => {
@@ -179,9 +231,40 @@ export function FileTable() {
   return (
     <div className="flex h-full flex-col">
       {activeView && (
-        <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2">
-          <span className="shrink-0 text-sm font-medium">{activeView.name}</span>
-          <ViewChips view={activeView} onEdit={() => openBuilder(activeView)} />
+        <div className="space-y-1 border-b bg-muted/30 px-4 py-2">
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 text-sm font-medium">{activeView.name}</span>
+            <ViewChips view={activeView} onEdit={() => openBuilder(activeView)} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label className="text-muted-foreground">Group by</label>
+            <select
+              value={groupBy}
+              onChange={(event) => setGroupBy(event.target.value as ViewGroupBy)}
+              className="h-7 rounded-md border bg-background px-2 text-xs"
+            >
+              <option value="none">No grouping</option>
+              <option value="concept">Concept</option>
+              <option value="doc_type">Document type</option>
+              <option value="topic">Topic</option>
+              <option value="source">Source</option>
+              <option value="month">Month</option>
+            </select>
+            {groupBy !== 'none' &&
+              (groups?.groups ?? [])
+                .slice(0, 20)
+                .map((group: { key: string; label: string; count: number }) => (
+                <span
+                  key={group.key}
+                  className="rounded-full bg-background px-2 py-0.5"
+                  title={`${group.label}: ${group.count}`}
+                >
+                  {group.label}{' '}
+                  <span className="text-muted-foreground">{group.count}</span>
+                </span>
+              ))}
+          </div>
+          {facets && <FacetSummary facets={facets} />}
         </div>
       )}
 

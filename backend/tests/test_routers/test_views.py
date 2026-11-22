@@ -65,6 +65,20 @@ async def test_view_crud_and_evaluation(
     assert body["total"] == 1
     assert body["files"][0]["filename"] == "invoice.pdf"
 
+    facets = await client.get(f"/api/v1/views/{view['id']}/facets")
+    assert facets.status_code == 200
+    assert facets.json()["total"] == 1
+    assert facets.json()["doc_types"] == [{"value": "invoice", "count": 1}]
+
+    groups = await client.get(
+        f"/api/v1/views/{view['id']}/groups",
+        params={"group_by": "doc_type"},
+    )
+    assert groups.status_code == 200
+    assert groups.json()["groups"] == [
+        {"key": "invoice", "label": "invoice", "count": 1}
+    ]
+
     preview = await client.post(
         "/api/v1/views/preview",
         json={"query": {"text": "acme"}},

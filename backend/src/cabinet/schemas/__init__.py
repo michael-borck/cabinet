@@ -263,6 +263,9 @@ class ViewQuery(BaseModel):
     sources: list[int] = Field(default_factory=list)
     text: str | None = None
     clusters: Literal["collapse", "separate"] = "collapse"
+    group_by: Literal["none", "concept", "doc_type", "topic", "source", "month"] = (
+        "none"
+    )
     sort_by: str = "file_modified_at"
     sort_dir: Literal["asc", "desc"] = "desc"
 
@@ -301,6 +304,37 @@ class ViewResponse(BaseModel):
 
 class ViewPreviewRequest(BaseModel):
     query: ViewQuery
+
+
+class ViewFacetValue(BaseModel):
+    value: str
+    count: int
+
+
+class ViewSourceFacet(BaseModel):
+    source_id: int
+    label: str
+    count: int
+
+
+class ViewFacets(BaseModel):
+    total: int = 0
+    doc_types: list[ViewFacetValue] = []
+    topics: list[ViewFacetValue] = []
+    sources: list[ViewSourceFacet] = []
+    months: list[ViewFacetValue] = []
+
+
+class ViewGroup(BaseModel):
+    key: str
+    label: str
+    count: int
+
+
+class ViewGroups(BaseModel):
+    group_by: str = "none"
+    total: int = 0
+    groups: list[ViewGroup] = []
 
 
 # ---------------------------------------------------------------------------

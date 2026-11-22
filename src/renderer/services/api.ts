@@ -105,6 +105,14 @@ export interface ViewConceptFilter {
   match?: 'any' | 'all'
 }
 
+export type ViewGroupBy =
+  | 'none'
+  | 'concept'
+  | 'doc_type'
+  | 'topic'
+  | 'source'
+  | 'month'
+
 export interface ViewQuery {
   concepts?: ViewConceptFilter
   doc_types?: string[]
@@ -112,8 +120,40 @@ export interface ViewQuery {
   sources?: number[]
   text?: string
   clusters?: 'collapse' | 'separate'
+  group_by?: ViewGroupBy
   sort_by?: string
   sort_dir?: 'asc' | 'desc'
+}
+
+export interface ViewFacetValue {
+  value: string
+  count: number
+}
+
+export interface ViewSourceFacet {
+  source_id: number
+  label: string
+  count: number
+}
+
+export interface ViewFacets {
+  total: number
+  doc_types: ViewFacetValue[]
+  topics: ViewFacetValue[]
+  sources: ViewSourceFacet[]
+  months: ViewFacetValue[]
+}
+
+export interface ViewGroup {
+  key: string
+  label: string
+  count: number
+}
+
+export interface ViewGroups {
+  group_by: string
+  total: number
+  groups: ViewGroup[]
 }
 
 export interface SavedView {
@@ -133,6 +173,7 @@ export const createView = (data: {
   name: string
   query: ViewQuery
   description?: string
+  color?: string | null
   pinned?: boolean
 }) => api.post('/views', data).then(r => r.data)
 export const updateView = (id: number, data: Record<string, unknown>) =>
@@ -140,6 +181,10 @@ export const updateView = (id: number, data: Record<string, unknown>) =>
 export const deleteView = (id: number) => api.delete(`/views/${id}`)
 export const getViewFiles = (id: number, params: Record<string, unknown>) =>
   api.get(`/views/${id}/files`, { params }).then(r => r.data)
+export const getViewFacets = (id: number) =>
+  api.get(`/views/${id}/facets`).then(r => r.data)
+export const getViewGroups = (id: number, groupBy: string) =>
+  api.get(`/views/${id}/groups`, { params: { group_by: groupBy } }).then(r => r.data)
 export const previewView = (query: ViewQuery, params: Record<string, unknown> = {}) =>
   api.post('/views/preview', { query }, { params }).then(r => r.data)
 

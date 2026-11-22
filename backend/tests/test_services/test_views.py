@@ -207,3 +207,81 @@ async def test_cluster_collapse_counts_once(session: AsyncSession):
         ViewQuery(text="report", clusters="separate")
     )
     assert separate.total == 2
+
+
+async def test_facets_and_groups(session: AsyncSession):
+    source = Source(path="/tmp/views", label="Docs", recursive=True)
+    session.add(source)
+    await session.flush()
+
+    invoice = await _document(
+        session,
+        "sha256:inv",
+        doc_type="invoice",
+        topics=["billing", "urgent"],
+        summary="invoice",
+    )
+    note = await _document(
+        session,
+        "sha256:note",
+        doc_type="note",
+        topics=["travel"],
+        summary="note",
+    )
+    invoice2 = await _document(
+        session,
+        "sha256:inv2",
+        doc_type="invoice",
+        topics=["billing"],
+        summary="invoice two",
+    )
+    finance = await CategoryRepository.create(session, name="Finance")
+    travel = await CategoryRepository.create(session, name="Travel")
+    session.add_all(
+        [
+            _file(source.id, invoice, "invoice.pdf", modified=datetime(2026, 1, 15)),
+            _file(source.id, note, "notes.pdf", modified=datetime(2026, 2, 10)),
+            _file(source.id, invoice2, "invoice2.pdf", modified=datetime(2026, 1, 20)),
+        ]
+    )
+    session.add_all(
+        [
+            DocumentCategory(document_id=invoice.id, category_id=finance.id),
+            DocumentCategory(document_id=invoice2.id, category_id=finance.id),
+            DocumentCategory(document_id=note.id, category_id=travel.id),
+        ]
+    )
+    await session.flush()
+
+    service = ViewQueryService(session)
+    facets = await service.facets(ViewQuery())
+
+    assert facets.total == 3
+    assert {f.value: f.count for f in facets.doc_types} == {
+        "invoice": 2,
+        "note": 1,
+    }
+    assert {f.value: f.count for f in facets.topics} == {
+        "billing": 2,
+        "urgent": 1,
+        "travel": 1,
+    }
+    assert facets.sources[0].label == "Docs"
+    assert facets.sources[0].count == 3
+    assert {f.value: f.count for f in facets.months} == {
+        "2026-01": 2,
+        "2026-02": 1,
+    }
+
+    by_type = await service.groups(ViewQuery(), group_by="doc_type")
+    assert {g.label: g.count for g in by_type.groups} == {
+        "invoice": 2,
+        "note": 1,
+    }
+    assert by_type.total == 3
+
+    by_concept = await service.groups(ViewQuery(), group_by="concept")
+    assert {g.label: g.count for g in by_concept.groups} == {
+        "Finance": 2,
+        "Travel": 1,
+    }

@@ -1,7 +1,7 @@
 # Design: Phase 4 — Views, not one tree
 
-- **Status:** 4a implemented (saved live views, builder, cluster-aware
-  list); 4b facets/grouping/editing and 4c semantic views pending.
+- **Status:** 4a–4b implemented (saved live views + builder/onboarding;
+  facets, grouping, colours); 4c semantic views pending.
 - **Date:** 2026-11-23
 - **Scope:** Multiple saved, live projections over the facts + concept layer:
   filter builder, grouping, facets, counts, version-cluster handling. No file
@@ -151,6 +151,14 @@ sidebar lists views, the builder creates **and edits** them (including
 pinning) with a live preview count, and the file table shows “N versions” plus
 the active filter chips. First-run/empty states guide adding a folder and
 configuring an LLM. Facets/grouping are 4b.
+
+**Implemented (4b).** `GET /views/{id}/facets` returns cluster-aware counts
+for document types, topics, sources, and months. `GET
+/views/{id}/groups?group_by=` returns counts for `concept`, `doc_type`,
+`topic`, `source`, or `month` (concept grouping is multi-membership, so its
+counts need not sum to the total). The view page has a group-by selector with
+group counts and a compact facet summary. The builder persists `group_by` and
+a colour; the sidebar shows the colour and pin. Icon selection is not wired.
 
 ## 9. Acceptance criteria
 

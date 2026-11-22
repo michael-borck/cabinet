@@ -10,8 +10,22 @@ import { useCategories } from '@/hooks/useCategories'
 import { useCreateView, usePreviewView, useUpdateView } from '@/hooks/useViews'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useViewBuilderStore } from '@/stores/viewBuilderStore'
-import { getSources, type SavedView, type ViewQuery } from '@/services/api'
+import {
+  getSources,
+  type SavedView,
+  type ViewGroupBy,
+  type ViewQuery,
+} from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
+
+const COLOR_PRESETS = [
+  { value: '', label: 'None' },
+  { value: '#3b82f6', label: 'Blue' },
+  { value: '#22c55e', label: 'Green' },
+  { value: '#f59e0b', label: 'Amber' },
+  { value: '#f43f5e', label: 'Rose' },
+  { value: '#8b5cf6', label: 'Violet' },
+]
 
 interface FlatCategory {
   id: number
@@ -59,6 +73,8 @@ export function ViewBuilder() {
   const [text, setText] = useState('')
   const [collapse, setCollapse] = useState(true)
   const [pinned, setPinned] = useState(false)
+  const [groupBy, setGroupBy] = useState<ViewGroupBy>('none')
+  const [color, setColor] = useState('')
 
   const flatCategories = useMemo(() => {
     const list = (categories ?? []) as FlatCategory[]
@@ -71,6 +87,7 @@ export function ViewBuilder() {
   const query = useMemo<ViewQuery>(() => {
     const value: ViewQuery = {
       clusters: collapse ? 'collapse' : 'separate',
+      group_by: groupBy,
     }
     if (conceptIds.size > 0) {
       value.concepts = {
@@ -86,7 +103,7 @@ export function ViewBuilder() {
     if (sourceId) value.sources = [Number(sourceId)]
     if (text.trim()) value.text = text.trim()
     return value
-  }, [conceptIds, includeDescendants, docTypes, topics, sourceId, text, collapse])
+  }, [conceptIds, includeDescendants, docTypes, topics, sourceId, text, collapse, groupBy])
 
   useEffect(() => {
     if (!open) return
@@ -101,6 +118,8 @@ export function ViewBuilder() {
     setText(view?.query?.text ?? '')
     setCollapse((view?.query?.clusters ?? 'collapse') === 'collapse')
     setPinned(view?.pinned ?? false)
+    setGroupBy((view?.query?.group_by as ViewGroupBy) ?? 'none')
+    setColor(view?.color ?? '')
     preview.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editingView])
@@ -122,7 +141,7 @@ export function ViewBuilder() {
     }
     if (editingView) {
       updateView.mutate(
-        { id: editingView.id, data: { name: trimmed, query, pinned } },
+        { id: editingView.id, data: { name: trimmed, query, pinned, color: color || null } },
         {
           onSuccess: (view: SavedView) => {
             toast.success('View updated')
@@ -134,7 +153,7 @@ export function ViewBuilder() {
       )
     } else {
       createView.mutate(
-        { name: trimmed, query, pinned },
+        { name: trimmed, query, pinned, color: color || null },
         {
           onSuccess: (view: SavedView) => {
             toast.success('View saved')
@@ -249,6 +268,43 @@ export function ViewBuilder() {
                 />
                 Pin to top
               </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted-foreground">Group by</label>
+                <select
+                  value={groupBy}
+                  onChange={(event) => setGroupBy(event.target.value as ViewGroupBy)}
+                  className="mt-1 flex h-10 w-full rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="none">No grouping</option>
+                  <option value="concept">Concept</option>
+                  <option value="doc_type">Document type</option>
+                  <option value="topic">Topic</option>
+                  <option value="source">Source</option>
+                  <option value="month">Month</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground">Colour</label>
+                <div className="mt-2 flex items-center gap-1.5">
+                  {COLOR_PRESETS.map((preset) => (
+                    <button
+                      key={preset.value || 'none'}
+                      type="button"
+                      title={preset.label}
+                      onClick={() => setColor(preset.value)}
+                      className={`flex h-6 w-6 items-center justify-center rounded-full border-2 ${
+                        color === preset.value ? 'border-primary' : 'border-transparent'
+                      }`}
+                      style={preset.value ? { backgroundColor: preset.value } : undefined}
+                    >
+                      {!preset.value && <X className="h-3 w-3 text-muted-foreground" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 

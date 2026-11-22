@@ -5,6 +5,8 @@ import {
   updateView,
   deleteView,
   previewView,
+  getViewFacets,
+  getViewGroups,
   type ViewQuery,
 } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
@@ -31,6 +33,8 @@ export function useUpdateView() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.views })
       qc.invalidateQueries({ queryKey: ['view-files'] })
+      qc.invalidateQueries({ queryKey: ['view-facets'] })
+      qc.invalidateQueries({ queryKey: ['view-groups'] })
     },
   })
 }
@@ -49,5 +53,21 @@ export function useDeleteView() {
 export function usePreviewView() {
   return useMutation({
     mutationFn: (query: ViewQuery) => previewView(query, { per_page: 1 }),
+  })
+}
+
+export function useViewFacets(viewId: number | null) {
+  return useQuery({
+    queryKey: ['view-facets', viewId],
+    queryFn: () => getViewFacets(viewId!),
+    enabled: viewId !== null,
+  })
+}
+
+export function useViewGroups(viewId: number | null, groupBy: string) {
+  return useQuery({
+    queryKey: ['view-groups', viewId, groupBy],
+    queryFn: () => getViewGroups(viewId!, groupBy),
+    enabled: viewId !== null && groupBy !== 'none',
   })
 }

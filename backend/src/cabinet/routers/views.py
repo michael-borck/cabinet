@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,8 @@ from cabinet.routers.files import _build_file_response
 from cabinet.schemas import (
     FileListResponse,
     ViewCreate,
+    ViewFacets,
+    ViewGroups,
     ViewPreviewRequest,
     ViewQuery,
     ViewResponse,
@@ -113,6 +117,42 @@ async def view_files(
         query, offset=(page - 1) * per_page, limit=per_page
     )
     return await _file_list(session, result, page=page, per_page=per_page)
+
+
+@router.get("/{view_id}/facets", response_model=ViewFacets)
+async def view_facets(
+    view_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Cluster-aware facet counts for a saved view (Phase 4b)."""
+    view = await ViewRepository.get(session, view_id)
+    if view is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"View {view_id} not found",
+        )
+    query = ViewQuery.model_validate(view.query)
+    return await ViewQueryService(session).facets(query)
+
+
+@router.get("/{view_id}/groups", response_model=ViewGroups)
+async def view_groups(
+    view_id: int,
+    group_by: Literal[
+        "none", "concept", "doc_type", "topic", "source", "month"
+    ]
+    | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
+    """Grouped counts for a saved view, optionally overriding its dimension."""
+    view = await ViewRepository.get(session, view_id)
+    if view is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"View {view_id} not found",
+        )
+    query = ViewQuery.model_validate(view.query)
+    return await ViewQueryService(session).groups(query, group_by=group_by)
 
 
 @router.post("/preview", response_model=FileListResponse)

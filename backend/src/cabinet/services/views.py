@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import String, and_, cast, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,9 +20,18 @@ from cabinet.db.models import (
     DocumentCategory,
     File,
     FileCategory,
+    Source,
 )
-from cabinet.db.repositories import TextIndexRepository
-from cabinet.schemas import ViewQuery
+from cabinet.db.repositories import CategoryRepository, TextIndexRepository
+from cabinet.schemas import (
+    ViewFacets,
+    ViewFacetValue,
+    ViewGroup,
+    ViewGroups,
+    ViewQuery,
+    ViewSourceFacet,
+)
+from cabinet.services.concepts import concept_path
 
 _SORT_COLUMNS = {
     "file_modified_at": File.file_modified_at,
@@ -83,6 +92,195 @@ class ViewQueryService:
             total=total,
             version_counts=await self._version_counts(files),
         )
+
+    # ------------------------------------------------------------------
+    # Facets and grouping (Phase 4b)
+    # ------------------------------------------------------------------
+
+    def _count_expr(self):
+        return func.count(func.distinct(_cluster_key()))
+
+    async def facets(self, query: ViewQuery) -> ViewFacets:
+        conditions = await self._conditions(query)
+        return ViewFacets(
+            total=await self._count(conditions, collapse=True),
+            doc_types=await self._facet_doc_types(conditions),
+            topics=await self._facet_topics(conditions),
+            sources=await self._facet_sources(conditions),
+            months=await self._facet_months(conditions),
+        )
+
+    async def groups(
+        self, query: ViewQuery, group_by: str | None = None
+    ) -> ViewGroups:
+        dimension = group_by or query.group_by or "none"
+        conditions = await self._conditions(query)
+        total = await self._count(conditions, collapse=True)
+
+        if dimension == "none":
+            return ViewGroups(
+                group_by="none",
+                total=total,
+                groups=[ViewGroup(key="all", label="All documents", count=total)],
+            )
+        if dimension == "concept":
+            groups = await self._group_concepts(conditions)
+        elif dimension == "doc_type":
+            groups = [
+                ViewGroup(key=value.value, label=value.value, count=value.count)
+                for value in await self._facet_doc_types(conditions)
+            ]
+        elif dimension == "topic":
+            groups = [
+                ViewGroup(key=value.value, label=value.value, count=value.count)
+                for value in await self._facet_topics(conditions)
+            ]
+        elif dimension == "month":
+            groups = [
+                ViewGroup(key=value.value, label=value.value, count=value.count)
+                for value in await self._facet_months(conditions)
+            ]
+        elif dimension == "source":
+            groups = [
+                ViewGroup(key=str(value.source_id), label=value.label, count=value.count)
+                for value in await self._facet_sources(conditions)
+            ]
+        else:
+            groups = []
+        return ViewGroups(group_by=dimension, total=total, groups=groups)
+
+    async def _facet_doc_types(self, conditions: list) -> list[ViewFacetValue]:
+        count = self._count_expr()
+        rows = (
+            await self._session.execute(
+                select(ContentFact.doc_type, count)
+                .select_from(File)
+                .outerjoin(Document, File.document_id == Document.id)
+                .outerjoin(
+                    ContentFact, ContentFact.content_hash == Document.content_hash
+                )
+                .where(*conditions, ContentFact.doc_type.isnot(None))
+                .group_by(ContentFact.doc_type)
+                .order_by(count.desc())
+                .limit(50)
+            )
+        ).all()
+        return [
+            ViewFacetValue(value=str(value), count=int(total))
+            for value, total in rows
+            if value
+        ]
+
+    async def _facet_topics(self, conditions: list) -> list[ViewFacetValue]:
+        count = self._count_expr()
+        topic = (
+            func.json_each(ContentFact.topics)
+            .table_valued("value")
+            .alias("topic")
+        )
+        rows = (
+            await self._session.execute(
+                select(topic.c.value, count)
+                .select_from(File)
+                .outerjoin(Document, File.document_id == Document.id)
+                .outerjoin(
+                    ContentFact, ContentFact.content_hash == Document.content_hash
+                )
+                .join(topic, true())
+                .where(*conditions, ContentFact.topics.isnot(None))
+                .group_by(topic.c.value)
+                .order_by(count.desc())
+                .limit(50)
+            )
+        ).all()
+        return [
+            ViewFacetValue(value=str(value), count=int(total))
+            for value, total in rows
+            if value
+        ]
+
+    async def _facet_sources(self, conditions: list) -> list[ViewSourceFacet]:
+        count = self._count_expr()
+        rows = (
+            await self._session.execute(
+                select(Source.id, Source.label, Source.path, count)
+                .select_from(File)
+                .join(Source, Source.id == File.source_id)
+                .outerjoin(Document, File.document_id == Document.id)
+                .outerjoin(
+                    ContentFact, ContentFact.content_hash == Document.content_hash
+                )
+                .where(*conditions)
+                .group_by(Source.id, Source.label, Source.path)
+                .order_by(count.desc())
+            )
+        ).all()
+        return [
+            ViewSourceFacet(
+                source_id=source_id,
+                label=label or path,
+                count=int(total),
+            )
+            for source_id, label, path, total in rows
+        ]
+
+    async def _facet_months(self, conditions: list) -> list[ViewFacetValue]:
+        count = self._count_expr()
+        month = func.strftime("%Y-%m", File.file_modified_at)
+        rows = (
+            await self._session.execute(
+                select(month, count)
+                .select_from(File)
+                .outerjoin(Document, File.document_id == Document.id)
+                .outerjoin(
+                    ContentFact, ContentFact.content_hash == Document.content_hash
+                )
+                .where(*conditions, File.file_modified_at.isnot(None))
+                .group_by(month)
+                .order_by(month.desc())
+                .limit(60)
+            )
+        ).all()
+        return [
+            ViewFacetValue(value=str(value), count=int(total))
+            for value, total in rows
+            if value
+        ]
+
+    async def _group_concepts(self, conditions: list) -> list[ViewGroup]:
+        count = self._count_expr()
+        rows = (
+            await self._session.execute(
+                select(Category.id, count)
+                .select_from(File)
+                .outerjoin(Document, File.document_id == Document.id)
+                .outerjoin(
+                    ContentFact, ContentFact.content_hash == Document.content_hash
+                )
+                .join(
+                    DocumentCategory,
+                    DocumentCategory.document_id == Document.id,
+                )
+                .join(Category, Category.id == DocumentCategory.category_id)
+                .where(*conditions)
+                .group_by(Category.id)
+                .order_by(count.desc())
+            )
+        ).all()
+
+        categories = await CategoryRepository.list_all(self._session)
+        by_id = {category.id: category for category in categories}
+        groups: list[ViewGroup] = []
+        for category_id, total in rows:
+            category = by_id.get(category_id)
+            groups.append(
+                ViewGroup(
+                    key=str(category_id),
+                    label=concept_path(category, by_id) if category else str(category_id),
+                    count=int(total),
+                )
+            )
+        return groups
 
     # ------------------------------------------------------------------
     # Filters
