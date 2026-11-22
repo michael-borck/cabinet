@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.config import get_settings
 from cabinet.db.models import Document, File, Job, LLMConfig, Source
-from cabinet.db.repositories import ContentFactRepository, DocumentRepository
+from cabinet.db.repositories import (
+    ContentFactRepository,
+    DocumentRepository,
+    TextIndexRepository,
+)
 from cabinet.extractors.base import ExtractionResult
 from cabinet.extractors.registry import EXTRACTOR_VERSION, get_extractor
 from cabinet.llm.base import LLMProvider
@@ -84,6 +88,7 @@ class PipelineService:
             else None
         )
         facts_enabled = bool(source and source.store_facts)
+        text_index_enabled = bool(source and source.store_text_index)
         provider = await self._get_active_provider()
         embedding_provider = await self._get_active_provider("embedding")
         embedding_service = (
@@ -185,9 +190,29 @@ class PipelineService:
                     if facts_enabled and provider is not None and content_hash:
                         fact = await self._fresh_fact(content_hash)
 
+                    needs_text = bool(
+                        text_index_enabled
+                        and content_hash
+                        and not await TextIndexRepository.has(
+                            self._session, content_hash
+                        )
+                    )
+
                     if fact is not None:
-                        # Fresh: no extraction, no facts LLM call. A stale or
-                        # missing vector is rebuilt from the stored facts.
+                        # Fresh facts: normally no extraction. Tier 2 may still
+                        # need one read to fill a missing text-index row; a
+                        # failure there must not discard the usable facts.
+                        if needs_text and file.extension:
+                            try:
+                                extraction = await self._extract_file(file)
+                                await self._index_text(content_hash, extraction)
+                            except Exception:
+                                logger.warning(
+                                    "Text-index fill failed for %s",
+                                    file.path,
+                                    exc_info=True,
+                                )
+                        # A stale or missing vector is rebuilt from the facts.
                         _queue_embedding(embedding_targets, fact, embedding_service)
                         facts_map[file.id] = fact
                         await self._set_status(file, "extracted")
@@ -196,6 +221,9 @@ class PipelineService:
 
                     if file.extension:
                         extraction = await self._extract_file(file)
+
+                    if text_index_enabled and content_hash:
+                        await self._index_text(content_hash, extraction)
 
                     if (
                         facts_enabled
@@ -227,6 +255,7 @@ class PipelineService:
                         fact = await ContentFactRepository.get(
                             self._session, content_hash
                         )
+                        await self._assign_cluster(file, fact)
                         _queue_embedding(embedding_targets, fact, embedding_service)
                         facts_map[file.id] = fact
                         await self._set_status(file, "extracted")
@@ -433,9 +462,32 @@ class PipelineService:
             entities=result.entities or None,
             topics=result.topics or None,
             provenance=result.provenance,
+            fingerprint=result.fingerprint,
             char_count=result.char_count,
             page_count=result.provenance.get("page_count"),
         )
+
+    async def _assign_cluster(self, file: File, fact: object) -> None:
+        """Group a freshly built document with near-duplicate siblings."""
+        fingerprint = getattr(fact, "fingerprint", None)
+        if not fingerprint or file.document_id is None:
+            return
+        document = await self._session.get(Document, file.document_id)
+        if document is None:
+            return
+        try:
+            await DocumentRepository.assign_cluster(
+                self._session,
+                document,
+                fingerprint=fingerprint,
+                file_path=file.path,
+                filename=file.filename,
+                source_id=file.source_id,
+            )
+        except Exception:
+            logger.warning(
+                "Cluster assignment failed for %s", file.path, exc_info=True
+            )
 
     # ------------------------------------------------------------------
     # Extraction
@@ -458,6 +510,21 @@ class PipelineService:
             return False
         file.status = "deferred"
         return True
+
+    async def _index_text(
+        self, content_hash: str, extraction: ExtractionResult | None
+    ) -> None:
+        """Store extracted text in the opt-in Tier-2 index, best-effort."""
+        if extraction is None or not extraction.text:
+            return
+        try:
+            await TextIndexRepository.upsert(
+                self._session, content_hash, extraction.text
+            )
+        except Exception:
+            logger.warning(
+                "Text index write failed for %s", content_hash, exc_info=True
+            )
 
     async def _extract_file(self, file: File) -> ExtractionResult | None:
         """Extract text from a single file.

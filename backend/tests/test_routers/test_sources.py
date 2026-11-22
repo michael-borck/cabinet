@@ -195,3 +195,52 @@ async def test_disable_store_facts_purges_unreferenced_facts(
     assert await ContentFactRepository.get(session, "sha256:facts1") is None
     remaining = (await session.execute(select(Document))).scalars().all()
     assert len(remaining) == 1  # identity is untouched; only facts are purged
+
+
+async def test_create_source_defaults_store_text_index_off(
+    client: AsyncClient, test_dir: str
+):
+    response = await client.post("/api/v1/sources", json={"path": test_dir})
+    assert response.status_code == 201
+    assert response.json()["store_text_index"] is False
+
+
+async def test_disable_store_text_index_purges_unreferenced_text(
+    client: AsyncClient, session: AsyncSession, test_dir: str
+):
+    from cabinet.db.models import Document, File
+    from cabinet.db.repositories import TextIndexRepository
+
+    response = await client.post("/api/v1/sources", json={"path": test_dir})
+    source_id = response.json()["id"]
+    enable = await client.patch(
+        f"/api/v1/sources/{source_id}", json={"store_text_index": True}
+    )
+    assert enable.json()["store_text_index"] is True
+
+    doc = Document(content_hash="sha256:text1", status="categorized")
+    session.add(doc)
+    await session.flush()
+    session.add(
+        File(
+            source_id=source_id,
+            document_id=doc.id,
+            content_hash=doc.content_hash,
+            path=f"{test_dir}/a.txt",
+            filename="a.txt",
+            size_bytes=1,
+            status="categorized",
+        )
+    )
+    await TextIndexRepository.upsert(session, "sha256:text1", "searchable body")
+    await session.commit()
+    assert await TextIndexRepository.has(session, "sha256:text1")
+
+    patch = await client.patch(
+        f"/api/v1/sources/{source_id}", json={"store_text_index": False}
+    )
+    assert patch.status_code == 200
+    assert patch.json()["store_text_index"] is False
+
+    session.expire_all()
+    assert not await TextIndexRepository.has(session, "sha256:text1")

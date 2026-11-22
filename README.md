@@ -85,7 +85,8 @@ default for newly added folders), Cabinet keeps a per-document AI summary,
 document type, entities, and topics so the file can be re-categorised later
 without re-reading it. If an embedding model is configured (local Ollama
 `nomic-embed-text` by default), one vector per document is stored for
-organisation and similar-file grouping.
+organisation and similar-file grouping. Full-text search over document
+contents is opt-in per folder and off by default.
 
 ## License
 

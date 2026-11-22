@@ -1,5 +1,7 @@
 """Tests for file category-assignment endpoints."""
 
+from datetime import datetime
+
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,7 +160,7 @@ async def test_get_file_facts(
         session,
         content_hash="sha256:factsx",
         extractor_version="1",
-        facts_version=1,
+        facts_version=2,
         summary="Invoice summary",
         doc_type="invoice",
         topics=["billing"],
@@ -223,7 +225,7 @@ async def test_list_files_q_searches_facts(
         session,
         content_hash="sha256:qsearch",
         extractor_version="1",
-        facts_version=1,
+        facts_version=2,
         summary="A consulting invoice for Q1",
         doc_type="invoice",
         topics=["billing"],
@@ -235,3 +237,56 @@ async def test_list_files_q_searches_facts(
     body = response.json()
     assert body["total"] == 1
     assert body["files"][0]["filename"] == "a.txt"
+
+
+async def test_file_versions_endpoint(
+    client: AsyncClient, session: AsyncSession, tmp_path
+):
+    source = Source(path=str(tmp_path), recursive=True)
+    session.add(source)
+    await session.flush()
+
+    primary = Document(content_hash="sha256:v1", status="categorized")
+    session.add(primary)
+    await session.flush()
+    primary.cluster_id = primary.id
+    other = Document(
+        content_hash="sha256:v2", status="categorized", cluster_id=primary.id
+    )
+    session.add(other)
+    await session.flush()
+
+    primary_file = File(
+        source_id=source.id,
+        document_id=primary.id,
+        content_hash=primary.content_hash,
+        path=str(tmp_path / "report.txt"),
+        filename="report.txt",
+        size_bytes=1,
+        status="categorized",
+        file_modified_at=datetime(2026, 1, 1),
+    )
+    newer_file = File(
+        source_id=source.id,
+        document_id=other.id,
+        content_hash=other.content_hash,
+        path=str(tmp_path / "report_v2.txt"),
+        filename="report_v2.txt",
+        size_bytes=1,
+        status="categorized",
+        file_modified_at=datetime(2026, 1, 2),
+    )
+    session.add_all([primary_file, newer_file])
+    await session.commit()
+
+    response = await client.get(f"/api/v1/files/{primary_file.id}/versions")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cluster_id"] == primary.id
+    assert {v["filename"] for v in body["versions"]} == {
+        "report.txt",
+        "report_v2.txt",
+    }
+    marked = [v for v in body["versions"] if v["is_primary"]]
+    assert len(marked) == 1
+    assert marked[0]["filename"] == "report_v2.txt"  # newest by mtime

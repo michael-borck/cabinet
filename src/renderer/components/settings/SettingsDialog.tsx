@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles } from 'lucide-react'
+import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText } from 'lucide-react'
 import { isAxiosError } from 'axios'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,6 +27,7 @@ interface SourceRow {
   exclude_patterns: string[]
   watch_enabled: boolean
   store_facts: boolean
+  store_text_index: boolean
   availability: string
 }
 
@@ -84,6 +85,12 @@ function SourcesTab() {
       updateSource(id, { store_facts: enabled }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.sources }) },
     onError: (err) => { toast.error(`Failed to update facts storage: ${errorDetail(err)}`) },
+  })
+  const textIndexMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      updateSource(id, { store_text_index: enabled }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.sources }) },
+    onError: (err) => { toast.error(`Failed to update full-text index: ${errorDetail(err)}`) },
   })
   const excludesMut = useMutation({
     mutationFn: ({ id, patterns }: { id: number; patterns: string[] }) =>
@@ -149,6 +156,18 @@ function SourcesTab() {
                   onClick={() => factsMut.mutate({ id: s.id, enabled: !s.store_facts })}
                 >
                   <Sparkles className="h-3 w-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title={s.store_text_index
+                    ? 'Stop indexing full text for this folder (purges unreferenced text)'
+                    : 'Index full text for search (stores extracted text locally)'}
+                  className={s.store_text_index ? 'text-primary' : undefined}
+                  disabled={textIndexMut.isPending}
+                  onClick={() => textIndexMut.mutate({ id: s.id, enabled: !s.store_text_index })}
+                >
+                  <FileText className="h-3 w-3" />
                 </Button>
                 <Button
                   variant="ghost"

@@ -33,6 +33,8 @@ class SourceCreate(BaseModel):
     watch_enabled: bool = False
     # Tier 1 facts (Phase 2a): on for new sources, off for migrated ones.
     store_facts: bool = True
+    # Tier 2 full-text index (Phase 2b): opt-in, off everywhere by default.
+    store_text_index: bool = False
 
     _clean = field_validator("exclude_patterns")(_clean_patterns)
 
@@ -43,6 +45,7 @@ class SourceUpdate(BaseModel):
     exclude_patterns: list[str] | None = None
     watch_enabled: bool | None = None
     store_facts: bool | None = None
+    store_text_index: bool | None = None
 
     _clean = field_validator("exclude_patterns")(_clean_patterns)
 
@@ -58,6 +61,8 @@ class SourceResponse(BaseModel):
     watch_enabled: bool = False
     # Tier 1 facts storage (Phase 2a, D3).
     store_facts: bool = False
+    # Tier 2 full-text index (Phase 2b, D3): opt-in.
+    store_text_index: bool = False
     # Derived at read time from the filesystem ("available" / "unavailable").
     availability: str = "available"
     last_scanned_at: datetime | None
@@ -141,6 +146,8 @@ class FileResponse(BaseModel):
     # "available" | "source_unavailable" | "cloud_placeholder" | "missing"
     # (derived at read time, design §4.4).
     availability: str = "available"
+    # Near-duplicate/version cluster (Phase 2b, design §3.4); None = singleton.
+    cluster_id: int | None = None
     file_modified_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -177,6 +184,20 @@ class FileFactsResponse(BaseModel):
     # True when extractor/facts versions no longer match (will be rebuilt).
     stale: bool = False
     updated_at: datetime | None = None
+
+
+class FileVersionBrief(BaseModel):
+    document_id: int
+    file_id: int
+    filename: str
+    path: str
+    file_modified_at: datetime | None
+    is_primary: bool = False
+
+
+class FileVersionList(BaseModel):
+    cluster_id: int | None = None
+    versions: list[FileVersionBrief] = []
 
 
 # ---------------------------------------------------------------------------

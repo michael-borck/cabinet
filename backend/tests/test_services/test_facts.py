@@ -91,7 +91,7 @@ def test_parse_falls_back_when_summary_missing():
     assert result.summary == "raw sampled text"
     assert result.topics == ["x"]
     assert result.doc_type is None
-    assert FACTS_VERSION == 1
+    assert FACTS_VERSION == 2
 
 
 def test_parse_tolerates_hostile_shapes():

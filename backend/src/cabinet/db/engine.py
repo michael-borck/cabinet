@@ -115,6 +115,10 @@ async def init_db() -> None:
         # Cleanup migration: drop legacy FTS5 artifacts and text columns.
         await _cleanup_legacy_fts(conn)
 
+        # Phase 2b: opt-in Tier-2 full-text table (separate from the legacy
+        # files_fts removed above).
+        await _ensure_text_index_table(conn)
+
         # Additive migration: columns introduced after the initial schema
         # (create_all never ALTERs existing tables).
         await _add_missing_columns(conn)
@@ -247,6 +251,29 @@ async def _cleanup_legacy_fts(conn) -> None:
             logger.debug("Column '%s' already removed or does not exist", col)
 
 
+TEXT_INDEX_TABLE = "content_text_fts"
+
+
+async def _ensure_text_index_table(conn) -> None:
+    """Create the Tier-2 FTS5 table when the SQLite build supports it.
+
+    Kept separate from ``files_fts`` (dropped by ``_cleanup_legacy_fts``):
+    this one is opt-in per source and keyed by content hash, not file row.
+    """
+    try:
+        await conn.execute(
+            text(
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS {TEXT_INDEX_TABLE} "
+                "USING fts5(content_hash UNINDEXED, text)"
+            )
+        )
+    except Exception:
+        logger.warning(
+            "FTS5 is unavailable; Tier-2 full-text indexing will be disabled",
+            exc_info=True,
+        )
+
+
 # Columns added after the initial release: (table, column, DDL type).
 _ADDED_COLUMNS = [
     ("sources", "exclude_patterns", "JSON"),
@@ -269,6 +296,9 @@ _ADDED_COLUMNS = [
     ("content_facts", "embedding", "BLOB"),
     ("content_facts", "embedding_model", "VARCHAR"),
     ("content_facts", "embedding_dim", "INTEGER"),
+    ("content_facts", "fingerprint", "VARCHAR"),
+    # Phase 2b: opt-in Tier 2 full-text index.
+    ("sources", "store_text_index", "BOOLEAN NOT NULL DEFAULT 0"),
 ]
 
 

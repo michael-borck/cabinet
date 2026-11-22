@@ -48,6 +48,11 @@ class Source(Base):
     store_facts: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="0", nullable=False
     )
+    # Tier 2 full-text index (Phase 2b, D3): opt-in, off everywhere by
+    # default because extracted text approaches a second copy of the corpus.
+    store_text_index: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
@@ -145,6 +150,8 @@ class ContentFact(Base):
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String, nullable=True)
     embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 64-bit SimHash over word shingles, for near-duplicate/version grouping.
+    fingerprint: Mapped[str | None] = mapped_column(String, nullable=True)
     char_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

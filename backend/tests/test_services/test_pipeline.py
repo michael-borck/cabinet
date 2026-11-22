@@ -4,7 +4,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cabinet.db.models import ContentFact, Document, File, Job, Source
-from cabinet.db.repositories import ContentFactRepository
+from cabinet.db.repositories import (
+    ContentFactRepository,
+    FileRepository,
+    TextIndexRepository,
+)
 from cabinet.extractors.base import ExtractionResult
 from cabinet.services.pipeline import PipelineService
 
@@ -276,8 +280,19 @@ class _FactsProvider:
         return {"files": []}
 
 
-async def _make_source(session, tmp_path, *, store_facts: bool = True) -> Source:
-    source = Source(path=str(tmp_path), recursive=True, store_facts=store_facts)
+async def _make_source(
+    session,
+    tmp_path,
+    *,
+    store_facts: bool = True,
+    store_text_index: bool = False,
+) -> Source:
+    source = Source(
+        path=str(tmp_path),
+        recursive=True,
+        store_facts=store_facts,
+        store_text_index=store_text_index,
+    )
     session.add(source)
     await session.flush()
     return source
@@ -336,7 +351,7 @@ async def test_facts_built_once_then_reused(
     assert extractions == [file.id]
     fact = await ContentFactRepository.get(session, "sha256:aaa")
     assert fact is not None and fact.summary == "A summary."
-    assert fact.facts_version == 1
+    assert fact.facts_version == 2
     await session.refresh(doc)
     assert doc.status == "extracted"  # no assignments returned
 
@@ -516,3 +531,136 @@ async def test_embedding_failure_keeps_facts_and_categorisation(
     await session.refresh(doc)
     assert doc.status == "categorized"  # embeddings are an enhancement
     assert embed.embed_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b Tier-2 full-text index
+# ---------------------------------------------------------------------------
+
+async def test_text_index_populated_when_enabled(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    source = await _make_source(session, tmp_path, store_text_index=True)
+    file, _doc = await _add_hashed_file(
+        session, source, tmp_path, "a.txt", "sha256:txt"
+    )
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    provider = _FactsProvider()
+    extractions: list[int] = []
+    _patch_facts_run(monkeypatch, provider, extractions)
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    assert await TextIndexRepository.has(session, "sha256:txt")
+    assert extractions == [file.id]
+
+
+async def test_text_index_off_stores_no_text(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    source = await _make_source(session, tmp_path)  # Tier 2 off
+    file, _doc = await _add_hashed_file(
+        session, source, tmp_path, "a.txt", "sha256:txt"
+    )
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    extractions: list[int] = []
+    _patch_facts_run(monkeypatch, _FactsProvider(), extractions)
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    assert not await TextIndexRepository.has(session, "sha256:txt")
+
+
+async def test_enabling_text_index_backfills_without_rebuilding_facts(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    source = await _make_source(session, tmp_path)  # facts on, text off
+    file, _doc = await _add_hashed_file(
+        session, source, tmp_path, "a.txt", "sha256:txt"
+    )
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    provider = _FactsProvider()
+    extractions: list[int] = []
+    _patch_facts_run(monkeypatch, provider, extractions)
+    pipeline = PipelineService(session)
+
+    await pipeline.process_pending_files(job.id)
+    assert provider.facts_calls == 1
+    assert not await TextIndexRepository.has(session, "sha256:txt")
+
+    source.store_text_index = True
+    await session.commit()
+    await pipeline.process_pending_files(job.id)
+
+    assert await TextIndexRepository.has(session, "sha256:txt")
+    assert provider.facts_calls == 1  # facts reused, not rebuilt
+    assert extractions == [file.id, file.id]  # one extra read to fill the index
+
+
+async def test_full_text_search_matches_indexed_body(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    source = await _make_source(session, tmp_path, store_text_index=True)
+    file, _doc = await _add_hashed_file(
+        session, source, tmp_path, "a.txt", "sha256:txt"
+    )
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    async def fake_provider(self, kind="chat"):
+        return _FactsProvider() if kind == "chat" else None
+
+    async def fake_extract(self, f):
+        return ExtractionResult(
+            text="zanzibar confidential", metadata={}, char_count=21
+        )
+
+    monkeypatch.setattr(PipelineService, "_get_active_provider", fake_provider)
+    monkeypatch.setattr(PipelineService, "_extract_file", fake_extract)
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    rows, total = await FileRepository.list_files(session, query="zanzibar")
+    assert total == 1
+    assert rows[0].filename == "a.txt"
+
+
+async def test_near_duplicate_versions_cluster(
+    session: AsyncSession, tmp_path, monkeypatch
+):
+    source = await _make_source(session, tmp_path)
+    _report, report_doc = await _add_hashed_file(
+        session, source, tmp_path, "report.txt", "sha256:r1"
+    )
+    _report_v2, report_v2_doc = await _add_hashed_file(
+        session, source, tmp_path, "report_v2.txt", "sha256:r2"
+    )
+    _invoice, invoice_doc = await _add_hashed_file(
+        session, source, tmp_path, "invoice.txt", "sha256:i1"
+    )
+    job = Job(job_type="quick_sync", source_id=source.id)
+    session.add(job)
+    await session.commit()
+
+    provider = _FactsProvider()
+    extractions: list[int] = []
+    _patch_facts_run(monkeypatch, provider, extractions)
+
+    await PipelineService(session).process_pending_files(job.id)
+
+    await session.refresh(report_doc)
+    await session.refresh(report_v2_doc)
+    await session.refresh(invoice_doc)
+    assert report_doc.cluster_id is not None
+    assert report_doc.cluster_id == report_v2_doc.cluster_id
+    assert invoice_doc.cluster_id is None

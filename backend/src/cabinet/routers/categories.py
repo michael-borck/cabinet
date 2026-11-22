@@ -207,6 +207,11 @@ async def get_category_files(
                             detailed.source_id, True
                         )
                     ),
+                    cluster_id=(
+                        detailed.document.cluster_id
+                        if detailed.document is not None
+                        else None
+                    ),
                     file_modified_at=detailed.file_modified_at,
                     created_at=detailed.created_at,
                     updated_at=detailed.updated_at,

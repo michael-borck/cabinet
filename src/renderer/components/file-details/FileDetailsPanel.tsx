@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useCategories } from '@/hooks/useCategories'
-import { useAssignCategories, useFile, useFileFacts, useRemoveFileCategory } from '@/hooks/useFiles'
+import { useAssignCategories, useFile, useFileFacts, useFileVersions, useRemoveFileCategory } from '@/hooks/useFiles'
 import { useSelectionStore } from '@/stores/selectionStore'
 
 function formatSize(bytes: number): string {
@@ -96,6 +96,7 @@ export function FileDetailsPanel() {
   const { selectedFileId, setSelectedFile } = useSelectionStore()
   const { data: file } = useFile(selectedFileId)
   const { data: facts } = useFileFacts(selectedFileId)
+  const { data: versions } = useFileVersions(selectedFileId)
   const removeCat = useRemoveFileCategory()
 
   if (!selectedFileId || !file) {
@@ -166,6 +167,32 @@ export function FileDetailsPanel() {
                 {facts.language && <Badge variant="outline">{facts.language}</Badge>}
                 {(facts.topics ?? []).map((topic: string) => (
                   <Badge key={topic} variant="outline">{topic}</Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Near-duplicate/version cluster (Phase 2b) */}
+          {(versions?.versions?.length ?? 0) > 1 && (
+            <div>
+              <span className="text-xs font-medium text-muted-foreground">
+                Versions ({versions.versions.length})
+              </span>
+              <div className="mt-1 space-y-1">
+                {versions.versions.map((v: {
+                  document_id: number
+                  file_id: number
+                  filename: string
+                  is_primary: boolean
+                }) => (
+                  <button
+                    key={v.file_id}
+                    onClick={() => setSelectedFile(v.file_id)}
+                    className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-accent"
+                  >
+                    <span className="truncate">{v.filename}</span>
+                    {v.is_primary && <Badge variant="secondary">primary</Badge>}
+                  </button>
                 ))}
               </div>
             </div>

@@ -23,6 +23,8 @@ from cabinet.schemas import (
     FileFactsResponse,
     FileListResponse,
     FileResponse,
+    FileVersionBrief,
+    FileVersionList,
 )
 from cabinet.services.facts import FACTS_VERSION
 
@@ -59,6 +61,9 @@ def _build_file_response(file, *, source_available: bool = True) -> FileResponse
         mime_type=file.mime_type,
         status=file.status,
         availability=availability,
+        cluster_id=(
+            file.document.cluster_id if file.document is not None else None
+        ),
         file_modified_at=file.file_modified_at,
         created_at=file.created_at,
         updated_at=file.updated_at,
@@ -162,6 +167,53 @@ async def get_file_facts(
         facts_version=FACTS_VERSION,
     )
     return response
+
+
+@router.get("/{file_id}/versions", response_model=FileVersionList)
+async def get_file_versions(
+    file_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Return sibling versions grouped with this file's document, if any.
+
+    Grouping is by content similarity + filename stem + folder, never a
+    merge: every version remains its own document (design §3.4).
+    """
+    file = await FileRepository.get_by_id(session, file_id)
+    if file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {file_id} not found",
+        )
+    cluster_id = file.document.cluster_id if file.document is not None else None
+    if cluster_id is None:
+        return FileVersionList(
+            cluster_id=None,
+            versions=[
+                FileVersionBrief(
+                    document_id=file.document_id or 0,
+                    file_id=file.id,
+                    filename=file.filename,
+                    path=file.path,
+                    file_modified_at=file.file_modified_at,
+                    is_primary=True,
+                )
+            ],
+        )
+
+    pairs = await DocumentRepository.list_cluster(session, cluster_id)
+    versions = [
+        FileVersionBrief(
+            document_id=document.id,
+            file_id=instance.id,
+            filename=instance.filename,
+            path=instance.path,
+            file_modified_at=instance.file_modified_at,
+            is_primary=(index == 0),  # newest by mtime
+        )
+        for index, (document, instance) in enumerate(pairs)
+    ]
+    return FileVersionList(cluster_id=cluster_id, versions=versions)
 
 
 @router.post(

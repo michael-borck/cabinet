@@ -7,12 +7,14 @@ callers control transaction boundaries.  All queries use SQLAlchemy 2.0-style
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import String, cast, delete, func, or_, select, update
+from sqlalchemy import String, cast, delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -27,8 +29,11 @@ from cabinet.db.models import (
     LLMConfig,
     Source,
 )
+from cabinet.utils.fingerprint import fingerprint_similarity, stem_key
 from cabinet.utils.hashing import prefixed_hash
 from cabinet.utils.volumes import describe_source_root
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -94,6 +99,7 @@ class SourceRepository:
         exclude_patterns: list[str] | None = None,
         watch_enabled: bool = False,
         store_facts: bool = True,
+        store_text_index: bool = False,
     ) -> Source:
         volume_id, volume_rel_path = describe_source_root(path)
         source = Source(
@@ -103,6 +109,7 @@ class SourceRepository:
             exclude_patterns=exclude_patterns or None,
             watch_enabled=watch_enabled,
             store_facts=store_facts,
+            store_text_index=store_text_index,
             volume_id=volume_id,
             volume_rel_path=volume_rel_path,
         )
@@ -305,6 +312,98 @@ class DocumentRepository:
         return target
 
     @staticmethod
+    async def assign_cluster(
+        session: AsyncSession,
+        document: Document,
+        *,
+        fingerprint: str,
+        file_path: str,
+        filename: str,
+        source_id: int,
+        threshold: float = 0.9,
+    ) -> int | None:
+        """Group *document* with corroborated sibling versions (design §3.4).
+
+        Candidates must be in the same source and folder, share a normalised
+        filename stem, and have a SimHash similarity of at least *threshold*.
+        The cluster key is the earliest member's document id; the document is
+        grouped, never merged. Returns the cluster id or None.
+        """
+        parent_dir = os.path.dirname(file_path)
+        prefix = parent_dir.rstrip(os.sep) + os.sep
+        rows = (
+            await session.execute(
+                select(
+                    Document.id,
+                    Document.cluster_id,
+                    ContentFact.fingerprint,
+                    File.path,
+                    File.filename,
+                )
+                .join(
+                    ContentFact,
+                    ContentFact.content_hash == Document.content_hash,
+                )
+                .join(File, File.document_id == Document.id)
+                .where(
+                    Document.id != document.id,
+                    File.source_id == source_id,
+                    ContentFact.fingerprint.isnot(None),
+                    File.path.like(prefix + "%"),
+                )
+            )
+        ).all()
+
+        target_stem = stem_key(filename)
+        best: tuple[float, int, int, int | None] | None = None
+        for cand_id, cand_cluster, cand_fp, cand_path, cand_name in rows:
+            if os.path.dirname(cand_path) != parent_dir:
+                continue
+            if stem_key(cand_name) != target_stem:
+                continue
+            similarity = fingerprint_similarity(fingerprint, cand_fp)
+            if similarity < threshold:
+                continue
+            cluster_key = cand_cluster if cand_cluster is not None else cand_id
+            if best is None or similarity > best[0]:
+                best = (similarity, cluster_key, cand_id, cand_cluster)
+
+        if best is None:
+            return None
+
+        _, cluster_key, cand_id, cand_cluster = best
+        document.cluster_id = cluster_key
+        if cand_cluster is None:
+            candidate = await session.get(Document, cand_id)
+            if candidate is not None and candidate.cluster_id is None:
+                candidate.cluster_id = cluster_key
+        await session.flush()
+        return cluster_key
+
+    @staticmethod
+    async def list_cluster(
+        session: AsyncSession, cluster_id: int
+    ) -> list[tuple[Document, File]]:
+        """Representative (document, newest file) pairs in a cluster."""
+        rows = (
+            await session.execute(
+                select(Document, File)
+                .join(File, File.document_id == Document.id)
+                .where(Document.cluster_id == cluster_id)
+                .order_by(File.file_modified_at.desc(), File.id)
+            )
+        ).all()
+
+        seen: set[int] = set()
+        result: list[tuple[Document, File]] = []
+        for document, file in rows:
+            if document.id in seen:
+                continue
+            seen.add(document.id)
+            result.append((document, file))
+        return result
+
+    @staticmethod
     async def set_status(
         session: AsyncSession, document: Document, status: str
     ) -> None:
@@ -364,6 +463,7 @@ class ContentFactRepository:
         entities: dict | None = None,
         topics: list | None = None,
         provenance: dict | None = None,
+        fingerprint: str | None = None,
         char_count: int | None = None,
         page_count: int | None = None,
     ) -> ContentFact:
@@ -381,6 +481,7 @@ class ContentFactRepository:
         fact.entities = entities
         fact.topics = topics
         fact.provenance = provenance
+        fact.fingerprint = fingerprint
         fact.char_count = char_count
         fact.page_count = page_count
         # Summary/topics may have changed, so any previous vector is stale.
@@ -439,6 +540,124 @@ class ContentFactRepository:
         )
         await session.flush()
         return result.rowcount or 0
+
+
+# ---------------------------------------------------------------------------
+# TextIndexRepository (Phase 2b Tier 2, design §5.3/§5.4)
+# ---------------------------------------------------------------------------
+
+_TEXT_INDEX_TABLE = "content_text_fts"
+
+
+class TextIndexRepository:
+    """Opt-in FTS5 index over extracted text, keyed by content hash.
+
+    Raw text is normally ephemeral; this table exists only for sources with
+    ``store_text_index`` enabled and is purged when that flag is turned off.
+    Every method tolerates an SQLite build without FTS5 by degrading to a
+    no-op (search still works over filename/facts).
+    """
+
+    @staticmethod
+    async def _ensure(session: AsyncSession) -> bool:
+        try:
+            await session.execute(
+                text(
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS {_TEXT_INDEX_TABLE} "
+                    "USING fts5(content_hash UNINDEXED, text)"
+                )
+            )
+            return True
+        except Exception:
+            logger.warning("FTS5 unavailable; skipping Tier-2 text index")
+            return False
+
+    @staticmethod
+    async def has(session: AsyncSession, content_hash: str) -> bool:
+        if not await TextIndexRepository._ensure(session):
+            return False
+        result = await session.execute(
+            text(
+                f"SELECT 1 FROM {_TEXT_INDEX_TABLE} "
+                "WHERE content_hash = :h LIMIT 1"
+            ),
+            {"h": prefixed_hash(content_hash)},
+        )
+        return result.first() is not None
+
+    @staticmethod
+    async def upsert(session: AsyncSession, content_hash: str, text_value: str) -> None:
+        if not text_value:
+            return
+        if not await TextIndexRepository._ensure(session):
+            return
+        key = prefixed_hash(content_hash)
+        await session.execute(
+            text(f"DELETE FROM {_TEXT_INDEX_TABLE} WHERE content_hash = :h"),
+            {"h": key},
+        )
+        await session.execute(
+            text(
+                f"INSERT INTO {_TEXT_INDEX_TABLE} (content_hash, text) "
+                "VALUES (:h, :t)"
+            ),
+            {"h": key, "t": text_value},
+        )
+
+    @staticmethod
+    async def delete(session: AsyncSession, content_hash: str) -> None:
+        if not await TextIndexRepository._ensure(session):
+            return
+        await session.execute(
+            text(f"DELETE FROM {_TEXT_INDEX_TABLE} WHERE content_hash = :h"),
+            {"h": prefixed_hash(content_hash)},
+        )
+
+    @staticmethod
+    async def purge_unreferenced(session: AsyncSession) -> int:
+        """Drop index rows no text-index-enabled source still references."""
+        if not await TextIndexRepository._ensure(session):
+            return 0
+        result = await session.execute(
+            text(
+                f"DELETE FROM {_TEXT_INDEX_TABLE} WHERE content_hash NOT IN ("
+                "SELECT d.content_hash FROM documents d"
+                " JOIN files f ON f.document_id = d.id"
+                " JOIN sources s ON s.id = f.source_id"
+                " WHERE s.store_text_index = 1"
+                " AND d.content_hash IS NOT NULL)"
+            )
+        )
+        return result.rowcount or 0
+
+    @staticmethod
+    async def search_hashes(session: AsyncSession, query: str) -> list[str]:
+        """Content hashes whose indexed text matches *query* (up to 500)."""
+        fts_query = _fts_query(query)
+        if fts_query is None:
+            return []
+        if not await TextIndexRepository._ensure(session):
+            return []
+        try:
+            result = await session.execute(
+                text(
+                    f"SELECT content_hash FROM {_TEXT_INDEX_TABLE} "
+                    f"WHERE {_TEXT_INDEX_TABLE} MATCH :q LIMIT 500"
+                ),
+                {"q": fts_query},
+            )
+        except Exception:
+            logger.warning("FTS query failed for %r", query, exc_info=True)
+            return []
+        return [row[0] for row in result.all()]
+
+
+def _fts_query(query: str) -> str | None:
+    """Build a safe FTS5 query from user input (terms joined with AND)."""
+    terms = [t for t in re.findall(r"\w+", query, flags=re.UNICODE) if len(t) >= 2]
+    if not terms:
+        return None
+    return " AND ".join(f'"{term}"' for term in terms[:8])
 
 
 # ---------------------------------------------------------------------------
@@ -538,13 +757,19 @@ class FileRepository:
             ).outerjoin(
                 ContentFact, ContentFact.content_hash == Document.content_hash
             )
-            matches = or_(
+            conditions = [
                 File.filename.ilike(pattern),
                 File.path.ilike(pattern),
                 ContentFact.summary.ilike(pattern),
                 ContentFact.doc_type.ilike(pattern),
                 cast(ContentFact.topics, String).ilike(pattern),
-            )
+            ]
+            # Tier 2 is opt-in per source; the FTS table only contains rows
+            # for those sources, so matching hashes is naturally scoped.
+            fts_hashes = await TextIndexRepository.search_hashes(session, needle)
+            if fts_hashes:
+                conditions.append(Document.content_hash.in_(fts_hashes))
+            matches = or_(*conditions)
             base = base.where(matches)
             count_base = count_base.where(matches)
 

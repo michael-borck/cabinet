@@ -17,12 +17,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cabinet.llm.base import LLMProvider
+from cabinet.utils.fingerprint import simhash_hex
 
 logger = logging.getLogger(__name__)
 
 # Version of this prompt + parser. Stored on every row; a bump invalidates
 # all facts and forces a rebuild on the next run (design §5.1/§5.2).
-FACTS_VERSION = 1
+# v2 added the near-duplicate fingerprint (Phase 2b).
+FACTS_VERSION = 2
 
 _DEFAULT_INPUT_MAX_CHARS = 12000
 _MAX_SUMMARY_CHARS = 2000
@@ -48,6 +50,8 @@ class FactsResult:
     topics: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
     char_count: int = 0
+    # Near-duplicate fingerprint over the full extracted text (design §3.4).
+    fingerprint: str | None = None
 
 
 class FactsService:
@@ -87,12 +91,14 @@ class FactsService:
             _SYSTEM_PROMPT,
             _build_user_prompt(filename, extension, sampled, provenance),
         )
-        return parse_facts(
+        result = parse_facts(
             payload,
             provenance=provenance,
             char_count=len(text),
             fallback_text=sampled,
         )
+        result.fingerprint = simhash_hex(text)
+        return result
 
 
 # ---------------------------------------------------------------------------

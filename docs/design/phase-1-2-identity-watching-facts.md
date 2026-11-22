@@ -1,7 +1,6 @@
 # Design: Phase 1 (content identity + folder watching) and Phase 2 (facts cache)
 
-- **Status:** Draft for review — Phase 1a/1b and Phase 2a implemented;
-  Phase 2b in progress (server-side search + embeddings done).
+- **Status:** Draft for review — Phases 1a/1b, 2a and 2b implemented.
   Decisions D1–D5 and D7 settled 2026-11-22 (§7); D6 remains open
 - **Date:** 2026-11-22
 - **Scope:** Phase 1a content-based file identity, Phase 1b folder watching,
@@ -216,6 +215,16 @@ cost, inflate category counts, and clutter the view. Planned handling —
 
 Job accounting gains a `moved_count` so the UI can say "212 files moved,
 0 re-categorised" — the user-visible proof this phase worked.
+
+**Implemented (2b).** A 64-bit SimHash over word 3-shingles is stored on
+`content_facts.fingerprint` (facts version bumped to 2, so old rows rebuild
+once). `DocumentRepository.assign_cluster` groups a document only when a
+candidate is in the same source *and* folder, shares a normalised filename
+stem (strips `_v2`, `FINAL`, `(1)`, `- copy`), and scores ≥ 0.9 SimHash
+similarity; grouping is conservative, never a merge. `documents.cluster_id`
+is the earliest member's document id, and `GET /files/{id}/versions` returns
+the siblings with the newest-by-mtime marked primary. Category inheritance
+for a new version (the "proposal" step) is a follow-up, not shipped.
 
 ### 3.5 Acceptance criteria
 
@@ -477,7 +486,11 @@ without the client loading every file:
   keyed by hash, populated only for sources with `store_text_index`
   enabled (§5.4). This consciously re-introduces what `_cleanup_legacy_fts`
   removed — under an explicit per-source flag, with purge support, not as
-  a global default.
+  a global default. **Implemented:** `content_text_fts(content_hash
+  UNINDEXED, text)`; the pipeline fills a missing row even when facts are
+  fresh (one extra read), `q` searches it alongside filename/facts, and
+  turning the flag off purges rows no enabled source references. If a
+  SQLite build lacks FTS5 the index degrades to a no-op.
 
 ### 5.4 Privacy and storage posture — tiered storage (D3, decided)
 

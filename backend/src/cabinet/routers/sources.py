@@ -15,6 +15,7 @@ from cabinet.db.repositories import (
     ContentFactRepository,
     JobRepository,
     SourceRepository,
+    TextIndexRepository,
 )
 from cabinet.schemas import (
     JobResponse,
@@ -63,6 +64,7 @@ async def create_source(
         exclude_patterns=body.exclude_patterns,
         watch_enabled=body.watch_enabled,
         store_facts=body.store_facts,
+        store_text_index=body.store_text_index,
     )
     return source
 
@@ -90,6 +92,8 @@ async def update_source(
     # no other facts-enabled source still references (design §5.4).
     if fields.get("store_facts") is False:
         await ContentFactRepository.purge_unreferenced(session)
+    if fields.get("store_text_index") is False:
+        await TextIndexRepository.purge_unreferenced(session)
     return source
 
 
