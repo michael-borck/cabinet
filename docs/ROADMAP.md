@@ -15,7 +15,7 @@ only inside Cabinet. Phases are sequential slices, each shippable alone.
 | 1b | Folder watching (debounced reconcile, launch/periodic safety nets, removable-drive "unavailable" state + volume rebinding, cloud-placeholder deferral) | **Implemented** (backend + UI; placeholder detection on macOS/Windows) | [Phase 1+2 design §4](design/phase-1-2-identity-watching-facts.md) |
 | 2a | Facts cache (Tier 1): per-document summary / entities / topics / provenance locators, fuzzy fingerprint | **Implemented** (summary/type/entities/topics/provenance; fuzzy fingerprint deferred to 2b) | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
 | 2b | Document-level embeddings (organisation, not RAG; SQLite, no vector DB), server-side search, opt-in Tier 2 full-text (FTS) index, near-duplicate/version clusters | **Implemented** (embeddings, server-side search, opt-in FTS, SimHash/stem/folder version clusters; cluster category inheritance still a follow-up) | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
-| 3 | Concept governance (below): canonical concepts + aliases/synonyms, provisional concepts, consolidation pass, learning from manual corrections | Discussed (notes below), needs its own design doc | — |
+| 3 | Concept governance (below): canonical concepts + aliases/synonyms, provisional concepts, consolidation pass, learning from manual corrections | **Designed** (draft for review; D8–D12 open) | [Phase 3 design](design/phase-3-taxonomy-governance.md) |
 | 4 | Views, not one tree: multiple saved projections/facets over facts+concepts (topic, document type, project, people, date) — the "dynamic / personal taxonomy" phase, cheap because views are DB lookups over Phase 2 facts | Discussed only | — |
 | 5 | Projecting the view outward (below): portable curation sidecar first, then symlink-tree export, Finder tags, Obsidian-vault export (markdown stub + frontmatter per document) | Discussed (notes below) | — |
 
@@ -29,9 +29,10 @@ of scope; facts carry page/sheet provenance and originals open in their own
 tool); D7 filesystem capability ladder (corroborated inode on APFS/NTFS/ext4,
 hash-on-change on FAT/exFAT) plus volume-identity rebinding and an honest
 "unavailable" state for disconnected drives; D4 cloud-placeholder detection
-via `SF_DATALESS`/Windows recall attributes, with implicit reads deferred.
-Still open: D5 embedding provider for Anthropic configs (blocks 2b only),
-D6 tombstone retention/GC period.
+via `SF_DATALESS`/Windows recall attributes, with implicit reads deferred;
+D5 separate embedding config defaulting to local Ollama `nomic-embed-text`
+(Anthropic rejected for embeddings). Still open: D6 tombstone retention/GC
+period, and Phase 3's D8–D12 in its design doc.
 
 ### Independent backlog (no phase dependency)
 
@@ -41,7 +42,12 @@ D6 tombstone retention/GC period.
 - Dynamic backend port instead of fixed 8420.
 - Frontend tests (none today; backend has pytest coverage).
 
-## Phase 3 — Taxonomy governance — "bounded structure, unbounded vocabulary" (revisit)
+## Phase 3 — Taxonomy governance — "bounded structure, unbounded vocabulary" (designed)
+
+Design: [phase-3-taxonomy-governance.md](design/phase-3-taxonomy-governance.md)
+(draft for review; open decisions D8–D12: category-vs-concept table, alias
+uniqueness scope, promotion threshold, concept-embedding thresholds,
+consolidation cadence). Slices 3a–3d are defined there.
 
 The category system is a tree, so it cannot degrade into a graph hairball — but the
 *vocabulary* is unbounded and will drift:
