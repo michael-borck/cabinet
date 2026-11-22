@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="File Sorter", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Cabinet", version="0.1.0", lifespan=lifespan)
 
     if settings.api_token:
         api_token = settings.api_token

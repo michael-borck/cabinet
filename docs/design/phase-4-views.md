@@ -147,9 +147,10 @@ topics, sources, text (facts + opt-in FTS), cluster collapse/separate, and
 sort. Counts distinct clusters; collapsed pages return one representative per
 cluster with a `version_count`. `GET/POST/PATCH/DELETE /views`,
 `GET /views/{id}/files`, and `POST /views/preview` are live. The Library
-sidebar lists views, the builder creates them with a live preview count, and
-the file table shows “N versions”. Editing an existing view is API-ready but
-the UI is create/delete for now (4b). Facets/grouping are 4b.
+sidebar lists views, the builder creates **and edits** them (including
+pinning) with a live preview count, and the file table shows “N versions” plus
+the active filter chips. First-run/empty states guide adding a folder and
+configuring an LLM. Facets/grouping are 4b.
 
 ## 9. Acceptance criteria
 

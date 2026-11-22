@@ -7,6 +7,7 @@ import { FileTable } from '@/components/file-list/FileTable'
 import { FileDetailsPanel } from '@/components/file-details/FileDetailsPanel'
 import { SearchBar } from '@/components/search/SearchBar'
 import { SettingsDialog } from '@/components/settings/SettingsDialog'
+import { ViewBuilder } from '@/components/views/ViewBuilder'
 import { SyncProgress } from '@/components/progress/SyncProgress'
 import { UpdateNotification } from '@/components/UpdateNotification'
 import { useUIStore } from '@/stores/uiStore'
@@ -21,7 +22,7 @@ function App(): React.JSX.Element {
     <div className="flex h-screen flex-col">
       {/* Titlebar */}
       <div className="titlebar-drag-region flex h-10 shrink-0 items-center border-b px-4">
-        <span className="titlebar-no-drag text-sm font-semibold">File Sorter</span>
+        <span className="titlebar-no-drag text-sm font-semibold">Cabinet</span>
       </div>
 
       {/* Search */}
@@ -68,6 +69,7 @@ function App(): React.JSX.Element {
       </div>
 
       <Toaster position="bottom-right" />
+      <ViewBuilder />
     </div>
   )
 }

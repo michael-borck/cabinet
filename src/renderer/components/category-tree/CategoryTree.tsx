@@ -1,4 +1,4 @@
-import { ChevronRight, ChevronDown, FolderOpen, Folder, FolderPlus, LayoutList, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronRight, ChevronDown, FolderOpen, Folder, FolderPlus, LayoutList, Pencil, Pin, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import * as ContextMenu from '@radix-ui/react-context-menu'
@@ -12,8 +12,9 @@ import {
   useUpdateCategory,
 } from '@/hooks/useCategories'
 import { useSelectionStore } from '@/stores/selectionStore'
+import { useViewBuilderStore } from '@/stores/viewBuilderStore'
 import { useDeleteView, useViews } from '@/hooks/useViews'
-import { ViewBuilder } from '@/components/views/ViewBuilder'
+import type { SavedView } from '@/services/api'
 import { cn } from '@/lib/utils'
 
 interface CategoryNode {
@@ -190,7 +191,7 @@ export function CategoryTree() {
     setSelectedView,
   } = useSelectionStore()
   const [adding, setAdding] = useState(false)
-  const [builderOpen, setBuilderOpen] = useState(false)
+  const openBuilder = useViewBuilderStore((state) => state.openBuilder)
   const createCat = useCreateCategory()
   const { data: views } = useViews()
   const deleteView = useDeleteView()
@@ -231,12 +232,12 @@ export function CategoryTree() {
                 size="icon"
                 className="h-6 w-6"
                 title="New view"
-                onClick={() => setBuilderOpen(true)}
+                onClick={() => openBuilder()}
               >
                 <Plus className="h-3 w-3" />
               </Button>
             </div>
-            {views?.map((view: { id: number; name: string }) => (
+            {views?.map((view: SavedView) => (
               <div
                 key={view.id}
                 className={cn(
@@ -248,8 +249,19 @@ export function CategoryTree() {
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
                   onClick={() => setSelectedView(view.id)}
                 >
-                  <LayoutList className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  {view.pinned ? (
+                    <Pin className="h-3 w-3 shrink-0 text-primary" />
+                  ) : (
+                    <LayoutList className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  )}
                   <span className="truncate">{view.name}</span>
+                </button>
+                <button
+                  className="opacity-0 transition-opacity group-hover:opacity-100"
+                  title="Edit view"
+                  onClick={() => openBuilder(view)}
+                >
+                  <Pencil className="h-3 w-3 text-muted-foreground" />
                 </button>
                 <button
                   className="opacity-0 transition-opacity group-hover:opacity-100"
@@ -295,7 +307,6 @@ export function CategoryTree() {
           </div>
         </div>
       </ScrollArea>
-      <ViewBuilder open={builderOpen} onOpenChange={setBuilderOpen} />
     </div>
   )
 }

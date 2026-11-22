@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory, proposeTaxonomy, applyTaxonomyProposal, getTaxonomyInsights } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 import { useSelectionStore } from '@/stores/selectionStore'
+import { useUIStore } from '@/stores/uiStore'
 import { toast } from 'sonner'
 
 function errorDetail(err: unknown): string {
@@ -812,8 +813,11 @@ function InsightsTab() {
 }
 
 export function SettingsDialog() {
+  const open = useUIStore((state) => state.settingsOpen)
+  const setOpen = useUIStore((state) => state.setSettingsOpen)
+
   return (
-    <Dialog.Root>
+    <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
         <Button variant="ghost" size="icon" className="h-7 w-7">
           <Settings className="h-4 w-4" />

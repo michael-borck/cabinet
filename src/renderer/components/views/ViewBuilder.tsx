@@ -2,15 +2,16 @@ import { useEffect, useMemo, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { toast } from 'sonner'
+import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useCategories } from '@/hooks/useCategories'
-import { useCreateView, usePreviewView } from '@/hooks/useViews'
+import { useCreateView, usePreviewView, useUpdateView } from '@/hooks/useViews'
 import { useSelectionStore } from '@/stores/selectionStore'
-import { getSources, type ViewQuery } from '@/services/api'
+import { useViewBuilderStore } from '@/stores/viewBuilderStore'
+import { getSources, type SavedView, type ViewQuery } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
-import { useQuery } from '@tanstack/react-query'
 
 interface FlatCategory {
   id: number
@@ -37,12 +38,8 @@ function categoryPath(category: FlatCategory, byId: Map<number, FlatCategory>): 
   return parts.reverse().join(' > ')
 }
 
-interface ViewBuilderProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}
-
-export function ViewBuilder({ open, onOpenChange }: ViewBuilderProps) {
+export function ViewBuilder() {
+  const { open, editingView, closeBuilder } = useViewBuilderStore()
   const setSelectedView = useSelectionStore((state) => state.setSelectedView)
   const { data: categories } = useCategories('flat')
   const { data: sources } = useQuery({
@@ -50,6 +47,7 @@ export function ViewBuilder({ open, onOpenChange }: ViewBuilderProps) {
     queryFn: getSources,
   })
   const createView = useCreateView()
+  const updateView = useUpdateView()
   const preview = usePreviewView()
 
   const [name, setName] = useState('')
@@ -60,6 +58,7 @@ export function ViewBuilder({ open, onOpenChange }: ViewBuilderProps) {
   const [sourceId, setSourceId] = useState('')
   const [text, setText] = useState('')
   const [collapse, setCollapse] = useState(true)
+  const [pinned, setPinned] = useState(false)
 
   const flatCategories = useMemo(() => {
     const list = (categories ?? []) as FlatCategory[]
@@ -91,17 +90,20 @@ export function ViewBuilder({ open, onOpenChange }: ViewBuilderProps) {
 
   useEffect(() => {
     if (!open) return
-    setName('')
-    setConceptIds(new Set())
-    setIncludeDescendants(true)
-    setDocTypes('')
-    setTopics('')
-    setSourceId('')
-    setText('')
-    setCollapse(true)
+    const view: SavedView | null = editingView
+    setName(view?.name ?? '')
+    const concepts = view?.query?.concepts
+    setConceptIds(new Set(concepts?.ids ?? []))
+    setIncludeDescendants(concepts?.include_descendants ?? true)
+    setDocTypes((view?.query?.doc_types ?? []).join(', '))
+    setTopics((view?.query?.topics ?? []).join(', '))
+    setSourceId(view?.query?.sources?.[0] ? String(view.query.sources[0]) : '')
+    setText(view?.query?.text ?? '')
+    setCollapse((view?.query?.clusters ?? 'collapse') === 'collapse')
+    setPinned(view?.pinned ?? false)
     preview.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, editingView])
 
   const toggleConcept = (id: number) => {
     setConceptIds((current) => {
@@ -118,25 +120,41 @@ export function ViewBuilder({ open, onOpenChange }: ViewBuilderProps) {
       toast.error('Give the view a name')
       return
     }
-    createView.mutate(
-      { name: trimmed, query },
-      {
-        onSuccess: (view: { id: number }) => {
-          toast.success('View saved')
-          setSelectedView(view.id)
-          onOpenChange(false)
-        },
-        onError: () => toast.error('Failed to save view'),
-      }
-    )
+    if (editingView) {
+      updateView.mutate(
+        { id: editingView.id, data: { name: trimmed, query, pinned } },
+        {
+          onSuccess: (view: SavedView) => {
+            toast.success('View updated')
+            setSelectedView(view.id)
+            closeBuilder()
+          },
+          onError: () => toast.error('Failed to update view'),
+        }
+      )
+    } else {
+      createView.mutate(
+        { name: trimmed, query, pinned },
+        {
+          onSuccess: (view: SavedView) => {
+            toast.success('View saved')
+            setSelectedView(view.id)
+            closeBuilder()
+          },
+          onError: () => toast.error('Failed to save view'),
+        }
+      )
+    }
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={(next) => { if (!next) closeBuilder() }}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50" />
         <Dialog.Content className="fixed left-1/2 top-1/2 max-h-[85vh] w-[540px] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-lg border bg-background p-6 shadow-lg">
-          <Dialog.Title className="text-lg font-semibold">New view</Dialog.Title>
+          <Dialog.Title className="text-lg font-semibold">
+            {editingView ? 'Edit view' : 'New view'}
+          </Dialog.Title>
           <p className="mt-1 text-xs text-muted-foreground">
             A view is a saved live filter over your documents. It never copies or moves files.
           </p>
@@ -214,14 +232,24 @@ export function ViewBuilder({ open, onOpenChange }: ViewBuilderProps) {
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={collapse}
-                onChange={(event) => setCollapse(event.target.checked)}
-              />
-              Collapse versions (one row per version cluster)
-            </label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={collapse}
+                  onChange={(event) => setCollapse(event.target.checked)}
+                />
+                Collapse versions
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={pinned}
+                  onChange={(event) => setPinned(event.target.checked)}
+                />
+                Pin to top
+              </label>
+            </div>
           </div>
 
           <div className="mt-5 flex items-center justify-between gap-2">
@@ -232,8 +260,8 @@ export function ViewBuilder({ open, onOpenChange }: ViewBuilderProps) {
               <Button size="sm" variant="outline" disabled={preview.isPending} onClick={() => preview.mutate(query)}>
                 Preview
               </Button>
-              <Button size="sm" disabled={createView.isPending} onClick={save}>
-                Save view
+              <Button size="sm" disabled={createView.isPending || updateView.isPending} onClick={save}>
+                {editingView ? 'Save changes' : 'Save view'}
               </Button>
             </div>
           </div>
