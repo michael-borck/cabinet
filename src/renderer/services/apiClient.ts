@@ -9,4 +9,6 @@ export const queryKeys = {
   embeddingConfig: ['embeddingConfig'] as const,
   categoryReview: ['categoryReview'] as const,
   taxonomyInsights: ['taxonomyInsights'] as const,
+  views: ['views'] as const,
+  viewFiles: (id: number | null) => ['view-files', id] as const,
 }

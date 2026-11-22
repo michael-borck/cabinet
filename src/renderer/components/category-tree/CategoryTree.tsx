@@ -1,4 +1,4 @@
-import { ChevronRight, ChevronDown, FolderOpen, Folder, FolderPlus, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronRight, ChevronDown, FolderOpen, Folder, FolderPlus, LayoutList, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import * as ContextMenu from '@radix-ui/react-context-menu'
@@ -12,6 +12,8 @@ import {
   useUpdateCategory,
 } from '@/hooks/useCategories'
 import { useSelectionStore } from '@/stores/selectionStore'
+import { useDeleteView, useViews } from '@/hooks/useViews'
+import { ViewBuilder } from '@/components/views/ViewBuilder'
 import { cn } from '@/lib/utils'
 
 interface CategoryNode {
@@ -181,14 +183,22 @@ function TreeNode({ node, depth = 0 }: { node: CategoryNode; depth?: number }) {
 
 export function CategoryTree() {
   const { data: categories, isLoading } = useCategories('tree')
-  const { selectedCategoryId, setSelectedCategory } = useSelectionStore()
+  const {
+    selectedCategoryId,
+    selectedViewId,
+    setSelectedCategory,
+    setSelectedView,
+  } = useSelectionStore()
   const [adding, setAdding] = useState(false)
+  const [builderOpen, setBuilderOpen] = useState(false)
   const createCat = useCreateCategory()
+  const { data: views } = useViews()
+  const deleteView = useDeleteView()
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-2">
-        <span className="text-sm font-semibold">Categories</span>
+        <span className="text-sm font-semibold">Library</span>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setAdding(true)}>
           <Plus className="h-4 w-4" />
         </Button>
@@ -211,22 +221,81 @@ export function CategoryTree() {
       )}
       <ScrollArea className="flex-1">
         <div className="p-2">
-          <button
-            className={cn(
-              'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent',
-              selectedCategoryId === null && 'bg-accent text-accent-foreground font-medium'
+          <div className="mb-2">
+            <div className="flex items-center justify-between px-2 py-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Views
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                title="New view"
+                onClick={() => setBuilderOpen(true)}
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
+            {views?.map((view: { id: number; name: string }) => (
+              <div
+                key={view.id}
+                className={cn(
+                  'group flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-sm hover:bg-accent',
+                  selectedViewId === view.id && 'bg-accent text-accent-foreground font-medium'
+                )}
+              >
+                <button
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  onClick={() => setSelectedView(view.id)}
+                >
+                  <LayoutList className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{view.name}</span>
+                </button>
+                <button
+                  className="opacity-0 transition-opacity group-hover:opacity-100"
+                  title="Delete view"
+                  onClick={() => {
+                    if (!window.confirm(`Delete the view "${view.name}"? Files are not affected.`)) {
+                      return
+                    }
+                    deleteView.mutate(view.id, {
+                      onSuccess: () => {
+                        if (selectedViewId === view.id) setSelectedView(null)
+                      },
+                      onError: () => toast.error('Failed to delete view'),
+                    })
+                  }}
+                >
+                  <Trash2 className="h-3 w-3 text-muted-foreground" />
+                </button>
+              </div>
+            ))}
+            {(!views || views.length === 0) && (
+              <p className="px-2 py-1 text-xs text-muted-foreground">No views yet.</p>
             )}
-            onClick={() => setSelectedCategory(null)}
-          >
-            <FolderOpen className="h-4 w-4 text-muted-foreground" />
-            All Files
-          </button>
-          {isLoading && <div className="px-2 py-4 text-sm text-muted-foreground">Loading...</div>}
-          {categories?.map((cat: CategoryNode) => (
-            <TreeNode key={cat.id} node={cat} />
-          ))}
+          </div>
+
+          <div className="border-t pt-2">
+            <button
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent',
+                selectedCategoryId === null &&
+                  selectedViewId === null &&
+                  'bg-accent text-accent-foreground font-medium'
+              )}
+              onClick={() => setSelectedCategory(null)}
+            >
+              <FolderOpen className="h-4 w-4 text-muted-foreground" />
+              All Files
+            </button>
+            {isLoading && <div className="px-2 py-4 text-sm text-muted-foreground">Loading...</div>}
+            {categories?.map((cat: CategoryNode) => (
+              <TreeNode key={cat.id} node={cat} />
+            ))}
+          </div>
         </div>
       </ScrollArea>
+      <ViewBuilder open={builderOpen} onOpenChange={setBuilderOpen} />
     </div>
   )
 }

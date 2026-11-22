@@ -477,6 +477,37 @@ class Job(Base):
         return f"<Job id={self.id} type={self.job_type!r} status={self.status!r}>"
 
 
+class SavedView(Base):
+    """A saved live query over facts + concepts (Phase 4a).
+
+    Stores only the query spec; no files or assignments are copied. Evaluating
+    a view is a normal DB query, so adding documents changes the result without
+    editing the view.
+    """
+
+    __tablename__ = "saved_views"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    icon: Mapped[str | None] = mapped_column(String, nullable=True)
+    color: Mapped[str | None] = mapped_column(String, nullable=True)
+    # ViewQuery serialised as JSON (filters + cluster handling + sort).
+    query: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    pinned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"<SavedView id={self.id} name={self.name!r}>"
+
+
 class LLMConfig(Base):
     __tablename__ = "llm_configs"
 

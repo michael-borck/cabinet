@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getFiles, getFile, getFileFacts, getFileVersions, assignCategories, removeFileCategory } from '@/services/api'
+import { getFiles, getFile, getFileFacts, getFileVersions, getViewFiles, assignCategories, removeFileCategory } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 
 export function useFiles(params: Record<string, unknown> = {}) {
@@ -25,7 +25,10 @@ interface FileListPage {
  * of the paginated GET /files endpoint and flattening the results.
  * Changing `params` changes the query key, which resets pagination.
  */
-export function useAllFiles(params: Record<string, unknown> = {}) {
+export function useAllFiles(
+  params: Record<string, unknown> = {},
+  options: { enabled?: boolean } = {}
+) {
   const query = useInfiniteQuery({
     queryKey: queryKeys.files({ ...params, per_page: PAGE_SIZE }),
     queryFn: ({ pageParam }): Promise<FileListPage> =>
@@ -37,14 +40,56 @@ export function useAllFiles(params: Record<string, unknown> = {}) {
       if (lastPage.files.length === 0) return undefined
       return loaded < lastPage.total ? allPages.length + 1 : undefined
     },
+    enabled: options.enabled ?? true,
   })
 
   const { hasNextPage, isFetchingNextPage, isError, fetchNextPage } = query
   useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage && !isError) {
+    if (options.enabled !== false && hasNextPage && !isFetchingNextPage && !isError) {
       fetchNextPage()
     }
-  }, [hasNextPage, isFetchingNextPage, isError, fetchNextPage])
+  }, [options.enabled, hasNextPage, isFetchingNextPage, isError, fetchNextPage])
+
+  const files = useMemo(
+    () => query.data?.pages.flatMap((p) => p.files) ?? [],
+    [query.data]
+  )
+  const total = query.data?.pages[0]?.total ?? 0
+
+  return {
+    files,
+    total,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    hasNextPage: query.hasNextPage,
+    isFetchingNextPage: query.isFetchingNextPage,
+  }
+}
+
+/**
+ * Loads a saved view's files (collapsed by version cluster server-side),
+ * progressively fetching every page.
+ */
+export function useViewFiles(viewId: number | null) {
+  const query = useInfiniteQuery({
+    queryKey: queryKeys.viewFiles(viewId),
+    queryFn: ({ pageParam }): Promise<FileListPage> =>
+      getViewFiles(viewId!, { per_page: PAGE_SIZE, page: pageParam }),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.files.length, 0)
+      if (lastPage.files.length === 0) return undefined
+      return loaded < lastPage.total ? allPages.length + 1 : undefined
+    },
+    enabled: viewId !== null,
+  })
+
+  const { hasNextPage, isFetchingNextPage, isError, fetchNextPage } = query
+  useEffect(() => {
+    if (viewId !== null && hasNextPage && !isFetchingNextPage && !isError) {
+      fetchNextPage()
+    }
+  }, [viewId, hasNextPage, isFetchingNextPage, isError, fetchNextPage])
 
   const files = useMemo(
     () => query.data?.pages.flatMap((p) => p.files) ?? [],

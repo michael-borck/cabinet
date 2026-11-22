@@ -246,6 +246,64 @@ class TaxonomyInsights(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Views (Phase 4a): saved live projections over facts + concepts
+# ---------------------------------------------------------------------------
+
+
+class ViewConceptFilter(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+    include_descendants: bool = True
+    match: Literal["any", "all"] = "any"
+
+
+class ViewQuery(BaseModel):
+    concepts: ViewConceptFilter | None = None
+    doc_types: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    sources: list[int] = Field(default_factory=list)
+    text: str | None = None
+    clusters: Literal["collapse", "separate"] = "collapse"
+    sort_by: str = "file_modified_at"
+    sort_dir: Literal["asc", "desc"] = "desc"
+
+
+class ViewCreate(BaseModel):
+    name: str
+    description: str | None = None
+    icon: str | None = None
+    color: str | None = None
+    query: ViewQuery = Field(default_factory=ViewQuery)
+    pinned: bool = False
+
+
+class ViewUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    icon: str | None = None
+    color: str | None = None
+    query: ViewQuery | None = None
+    pinned: bool | None = None
+
+
+class ViewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str | None
+    icon: str | None
+    color: str | None
+    query: ViewQuery
+    pinned: bool
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
+class ViewPreviewRequest(BaseModel):
+    query: ViewQuery
+
+
+# ---------------------------------------------------------------------------
 # File schemas
 # ---------------------------------------------------------------------------
 
@@ -268,6 +326,8 @@ class FileResponse(BaseModel):
     availability: str = "available"
     # Near-duplicate/version cluster (Phase 2b, design §3.4); None = singleton.
     cluster_id: int | None = None
+    # Populated by view queries: documents in this cluster (1 = singleton).
+    version_count: int = 1
     file_modified_at: datetime | None
     created_at: datetime
     updated_at: datetime

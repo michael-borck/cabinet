@@ -30,6 +30,7 @@ from cabinet.db.models import (
     FileCategory,
     Job,
     LLMConfig,
+    SavedView,
     Source,
 )
 from cabinet.utils.concepts import normalize_concept
@@ -662,6 +663,76 @@ def _fts_query(query: str) -> str | None:
     if not terms:
         return None
     return " AND ".join(f'"{term}"' for term in terms[:8])
+
+
+# ---------------------------------------------------------------------------
+# ViewRepository (Phase 4a)
+# ---------------------------------------------------------------------------
+
+
+class ViewRepository:
+    """CRUD for saved live views (query specs only)."""
+
+    @staticmethod
+    async def list_all(session: AsyncSession) -> Sequence[SavedView]:
+        result = await session.execute(
+            select(SavedView).order_by(
+                SavedView.pinned.desc(), SavedView.name.asc()
+            )
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    async def get(session: AsyncSession, view_id: int) -> SavedView | None:
+        return await session.get(SavedView, view_id)
+
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        *,
+        name: str,
+        description: str | None = None,
+        icon: str | None = None,
+        color: str | None = None,
+        query: dict | None = None,
+        pinned: bool = False,
+    ) -> SavedView:
+        view = SavedView(
+            name=name,
+            description=description,
+            icon=icon,
+            color=color,
+            query=query or {},
+            pinned=pinned,
+        )
+        session.add(view)
+        await session.flush()
+        return view
+
+    @staticmethod
+    async def update(
+        session: AsyncSession, view_id: int, **fields: object
+    ) -> SavedView | None:
+        view = await session.get(SavedView, view_id)
+        if view is None:
+            return None
+        for key, value in fields.items():
+            if hasattr(view, key):
+                setattr(view, key, value)
+        await session.flush()
+        # `updated_at` is server-generated; refresh so callers don't trigger
+        # a lazy load while building the response.
+        await session.refresh(view)
+        return view
+
+    @staticmethod
+    async def delete(session: AsyncSession, view_id: int) -> bool:
+        view = await session.get(SavedView, view_id)
+        if view is None:
+            return False
+        await session.delete(view)
+        await session.flush()
+        return True
 
 
 # ---------------------------------------------------------------------------

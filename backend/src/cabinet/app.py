@@ -76,6 +76,7 @@ def create_app() -> FastAPI:
         insights,
         jobs,
         sources,
+        views,
     )
     from cabinet.routers import (
         settings as settings_router,
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(categories.router, prefix="/api/v1")
     app.include_router(jobs.router, prefix="/api/v1")
     app.include_router(insights.router, prefix="/api/v1")
+    app.include_router(views.router, prefix="/api/v1")
     app.include_router(settings_router.router, prefix="/api/v1")
 
     @app.get("/api/v1/health")

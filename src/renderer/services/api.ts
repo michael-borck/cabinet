@@ -98,6 +98,51 @@ export const getJob = (id: number) => api.get(`/jobs/${id}`).then(r => r.data)
 // Health
 export const getHealth = () => api.get('/health').then(r => r.data)
 
+// Views (Phase 4a)
+export interface ViewConceptFilter {
+  ids: number[]
+  include_descendants?: boolean
+  match?: 'any' | 'all'
+}
+
+export interface ViewQuery {
+  concepts?: ViewConceptFilter
+  doc_types?: string[]
+  topics?: string[]
+  sources?: number[]
+  text?: string
+  clusters?: 'collapse' | 'separate'
+  sort_by?: string
+  sort_dir?: 'asc' | 'desc'
+}
+
+export interface SavedView {
+  id: number
+  name: string
+  description: string | null
+  icon: string | null
+  color: string | null
+  query: ViewQuery
+  pinned: boolean
+  created_at: string
+  updated_at: string | null
+}
+
+export const getViews = () => api.get('/views').then(r => r.data)
+export const createView = (data: {
+  name: string
+  query: ViewQuery
+  description?: string
+  pinned?: boolean
+}) => api.post('/views', data).then(r => r.data)
+export const updateView = (id: number, data: Record<string, unknown>) =>
+  api.patch(`/views/${id}`, data).then(r => r.data)
+export const deleteView = (id: number) => api.delete(`/views/${id}`)
+export const getViewFiles = (id: number, params: Record<string, unknown>) =>
+  api.get(`/views/${id}/files`, { params }).then(r => r.data)
+export const previewView = (query: ViewQuery, params: Record<string, unknown> = {}) =>
+  api.post('/views/preview', { query }, { params }).then(r => r.data)
+
 // Settings
 export const getLLMConfig = () => api.get('/settings/llm').then(r => r.data)
 export const setLLMConfig = (data: { provider: string; model: string; api_key?: string; base_url?: string }) =>

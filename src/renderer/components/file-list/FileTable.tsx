@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertTriangle, Cloud, FileIcon, MoreHorizontal } from 'lucide-react'
-import { useAllFiles } from '@/hooks/useFiles'
+import { useAllFiles, useViewFiles } from '@/hooks/useFiles'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { cn } from '@/lib/utils'
 
@@ -20,15 +20,20 @@ interface FileItem {
   size_bytes: number
   status: string
   availability?: string
+  cluster_id?: number | null
+  version_count?: number
   categories: { id: number; name: string; slug: string; color: string | null }[]
 }
 
 export function FileTable() {
-  const { selectedCategoryId } = useSelectionStore()
+  const { selectedCategoryId, selectedViewId } = useSelectionStore()
   const { selectedFileId, setSelectedFile } = useSelectionStore()
   const params: Record<string, unknown> = {}
   if (selectedCategoryId) params.category_id = selectedCategoryId
-  const { files: loadedFiles, total, isLoading, isError, hasNextPage } = useAllFiles(params)
+  const categoryFiles = useAllFiles(params, { enabled: selectedViewId === null })
+  const viewFiles = useViewFiles(selectedViewId)
+  const { files: loadedFiles, total, isLoading, isError, hasNextPage } =
+    selectedViewId !== null ? viewFiles : categoryFiles
   const files = loadedFiles as unknown as FileItem[]
 
   const parentRef = useRef<HTMLDivElement>(null)
@@ -93,6 +98,11 @@ export function FileTable() {
                   <span className="truncate">{file.filename}</span>
                   {file.extension && (
                     <span className="text-xs text-muted-foreground">{file.extension}</span>
+                  )}
+                  {(file.version_count ?? 1) > 1 && (
+                    <span className="text-xs text-muted-foreground">
+                      {file.version_count} versions
+                    </span>
                   )}
                   {file.availability === 'source_unavailable' && (
                     <span className="text-xs text-muted-foreground">(drive not connected)</span>

@@ -1,6 +1,7 @@
 # Design: Phase 4 — Views, not one tree
 
-- **Status:** Draft for review — no code written against this yet.
+- **Status:** 4a implemented (saved live views, builder, cluster-aware
+  list); 4b facets/grouping/editing and 4c semantic views pending.
 - **Date:** 2026-11-23
 - **Scope:** Multiple saved, live projections over the facts + concept layer:
   filter builder, grouping, facets, counts, version-cluster handling. No file
@@ -139,6 +140,16 @@ No file/document rows are stored. Deleting a view deletes only the query.
 | 4c | semantic views: "similar to this document" (Phase 2b embeddings) and version-cluster views | Organisation beyond keywords |
 
 Each slice ships alone. 4a must not change the tree or assignment semantics.
+
+**Implemented (4a).** `saved_views` stores a `ViewQuery` JSON. Evaluation
+supports concept subtrees (`include_descendants`, `any`/`all`), doc types,
+topics, sources, text (facts + opt-in FTS), cluster collapse/separate, and
+sort. Counts distinct clusters; collapsed pages return one representative per
+cluster with a `version_count`. `GET/POST/PATCH/DELETE /views`,
+`GET /views/{id}/files`, and `POST /views/preview` are live. The Library
+sidebar lists views, the builder creates them with a live preview count, and
+the file table shows “N versions”. Editing an existing view is API-ready but
+the UI is create/delete for now (4b). Facets/grouping are 4b.
 
 ## 9. Acceptance criteria
 
