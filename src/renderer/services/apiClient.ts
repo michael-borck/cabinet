@@ -8,4 +8,5 @@ export const queryKeys = {
   llmConfig: ['llmConfig'] as const,
   embeddingConfig: ['embeddingConfig'] as const,
   categoryReview: ['categoryReview'] as const,
+  taxonomyInsights: ['taxonomyInsights'] as const,
 }

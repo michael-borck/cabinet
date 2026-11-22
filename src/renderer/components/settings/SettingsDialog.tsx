@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText, Inbox } from 'lucide-react'
+import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText, Inbox, BarChart3 } from 'lucide-react'
 import { isAxiosError } from 'axios'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory } from '@/services/api'
+import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory, proposeTaxonomy, applyTaxonomyProposal, getTaxonomyInsights } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { toast } from 'sonner'
@@ -656,6 +656,161 @@ function ReviewTab() {
   )
 }
 
+interface ProposalNode {
+  name: string
+  definition: string | null
+  children: ProposalNode[]
+}
+
+interface TaxonomyInsightsData {
+  total_documents: number
+  total_concepts: number
+  approved_concepts: number
+  provisional_concepts: number
+  merged_concepts: number
+  singleton_rate: number
+  concepts_per_100_documents: number
+  possible_duplicate_pairs: number
+  aliases_total: number
+  concepts_with_aliases: number
+  confidence_buckets: Record<string, number>
+}
+
+function ProposalTree({ nodes, depth = 0 }: { nodes: ProposalNode[]; depth?: number }) {
+  return (
+    <ul className={depth === 0 ? 'space-y-1' : 'ml-3 space-y-1'}>
+      {nodes.map((node) => (
+        <li key={`${depth}-${node.name}`}>
+          <span className="text-xs font-medium">{node.name}</span>
+          {node.definition && (
+            <span className="ml-1 text-xs text-muted-foreground">— {node.definition}</span>
+          )}
+          {node.children.length > 0 && (
+            <ProposalTree nodes={node.children} depth={depth + 1} />
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function InsightsTab() {
+  const qc = useQueryClient()
+  const [proposal, setProposal] = useState<ProposalNode[] | null>(null)
+  const { data, isPending, isError } = useQuery({
+    queryKey: queryKeys.taxonomyInsights,
+    queryFn: getTaxonomyInsights,
+  })
+
+  const propose = useMutation({
+    mutationFn: proposeTaxonomy,
+    onSuccess: (result: { categories: ProposalNode[]; sampled_documents: number }) => {
+      setProposal(result.categories)
+      toast.success(`Proposed from ${result.sampled_documents} sampled documents`)
+    },
+    onError: (err) => { toast.error(`Proposal failed: ${errorDetail(err)}`) },
+  })
+  const apply = useMutation({
+    mutationFn: (nodes: ProposalNode[]) =>
+      applyTaxonomyProposal(nodes as unknown as Record<string, unknown>[]),
+    onSuccess: () => {
+      setProposal(null)
+      qc.invalidateQueries({ queryKey: queryKeys.categories() })
+      toast.success('Taxonomy applied — run a sync to assign files')
+    },
+    onError: (err) => { toast.error(`Apply failed: ${errorDetail(err)}`) },
+  })
+
+  if (isPending) {
+    return <p className="text-sm text-muted-foreground">Loading insights…</p>
+  }
+  if (isError) {
+    return <p className="text-sm text-destructive">Failed to load taxonomy insights.</p>
+  }
+
+  const insights = data as TaxonomyInsightsData
+  const metrics = [
+    { label: 'Documents', value: insights.total_documents },
+    { label: 'Concepts', value: insights.total_concepts },
+    { label: 'Provisional', value: insights.provisional_concepts },
+    { label: 'Merged', value: insights.merged_concepts },
+    { label: 'Singleton rate', value: `${Math.round(insights.singleton_rate * 100)}%` },
+    { label: 'Concepts / 100 docs', value: insights.concepts_per_100_documents.toFixed(1) },
+    { label: 'Possible duplicates', value: insights.possible_duplicate_pairs },
+    {
+      label: 'Aliases',
+      value: `${insights.aliases_total} across ${insights.concepts_with_aliases} concepts`,
+    },
+  ]
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h3 className="text-sm font-medium">Taxonomy health</h3>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {metrics.map((metric) => (
+            <div key={metric.label} className="rounded border p-2">
+              <div className="text-xs text-muted-foreground">{metric.label}</div>
+              <div className="text-sm font-medium">{metric.value}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {Object.entries(insights.confidence_buckets).map(([bucket, count]) => (
+            <Badge key={bucket} variant="secondary">
+              {bucket}: {count}
+            </Badge>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t pt-4">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-medium">Propose a taxonomy</h3>
+            <p className="text-xs text-muted-foreground">
+              Samples a diverse slice of the corpus and asks the LLM for a compact
+              tree. Applying creates/reuses concepts; run a sync afterwards to assign
+              files.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={propose.isPending}
+            onClick={() => propose.mutate()}
+          >
+            {propose.isPending ? 'Proposing…' : 'Propose'}
+          </Button>
+        </div>
+        {proposal && (
+          <div className="mt-3 rounded border p-3">
+            {proposal.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                The proposal was empty. Try after a sync has built facts for more documents.
+              </p>
+            ) : (
+              <ProposalTree nodes={proposal} />
+            )}
+            <div className="mt-3 flex gap-2">
+              <Button
+                size="sm"
+                disabled={apply.isPending || proposal.length === 0}
+                onClick={() => apply.mutate(proposal)}
+              >
+                Apply taxonomy
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setProposal(null)}>
+                Dismiss
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function SettingsDialog() {
   return (
     <Dialog.Root>
@@ -679,10 +834,14 @@ export function SettingsDialog() {
               <Tabs.Trigger value="review" className="px-4 py-2 text-sm data-[state=active]:border-b-2 data-[state=active]:border-primary">
                 <Inbox className="mr-1 inline h-4 w-4" /> Review
               </Tabs.Trigger>
+              <Tabs.Trigger value="insights" className="px-4 py-2 text-sm data-[state=active]:border-b-2 data-[state=active]:border-primary">
+                <BarChart3 className="mr-1 inline h-4 w-4" /> Insights
+              </Tabs.Trigger>
             </Tabs.List>
             <Tabs.Content value="sources" className="pt-4"><SourcesTab /></Tabs.Content>
             <Tabs.Content value="llm" className="pt-4"><LLMTab /></Tabs.Content>
             <Tabs.Content value="review" className="pt-4"><ReviewTab /></Tabs.Content>
+            <Tabs.Content value="insights" className="pt-4"><InsightsTab /></Tabs.Content>
           </Tabs.Root>
           <Dialog.Close asChild>
             <button className="absolute right-4 top-4">

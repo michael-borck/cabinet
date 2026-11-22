@@ -31,9 +31,13 @@ from cabinet.schemas import (
     ConsolidationResponse,
     FileListResponse,
     FileResponse,
+    TaxonomyProposalApplyRequest,
+    TaxonomyProposalApplyResponse,
+    TaxonomyProposalResponse,
 )
 from cabinet.services.concepts import TaxonomyReviewService
 from cabinet.services.consolidation import ConsolidationService
+from cabinet.services.taxonomy import TaxonomyProposalService
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
@@ -212,6 +216,38 @@ async def consolidate_categories(session: AsyncSession = Depends(get_session)):
         else None
     )
     return await ConsolidationService(session, provider).proposals()
+
+
+@router.post("/propose", response_model=TaxonomyProposalResponse)
+async def propose_taxonomy(session: AsyncSession = Depends(get_session)):
+    """Propose a taxonomy from a diverse corpus sample (Phase 3d)."""
+    config = await LLMConfigRepository.get_active(session, kind="chat")
+    if config is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configure an LLM before proposing a taxonomy.",
+        )
+    provider = create_provider(
+        provider=config.provider,
+        model=config.model,
+        api_key=config.api_key,
+        base_url=config.base_url,
+    )
+    try:
+        return await TaxonomyProposalService(session, provider).propose()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+
+@router.post("/propose/apply", response_model=TaxonomyProposalApplyResponse)
+async def apply_taxonomy_proposal(
+    body: TaxonomyProposalApplyRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Create/reuse the approved proposal's concepts (no file assignment)."""
+    return await TaxonomyProposalService(session).apply(body.categories)
 
 
 @router.post("", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)

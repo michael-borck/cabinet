@@ -211,6 +211,40 @@ class ConsolidationResponse(BaseModel):
     renames: list[ConsolidationRenameProposal] = []
 
 
+class TaxonomyProposalNode(BaseModel):
+    name: str
+    definition: str | None = None
+    children: list[TaxonomyProposalNode] = []
+
+
+class TaxonomyProposalResponse(BaseModel):
+    categories: list[TaxonomyProposalNode] = []
+    sampled_documents: int = 0
+
+
+class TaxonomyProposalApplyRequest(BaseModel):
+    categories: list[TaxonomyProposalNode]
+
+
+class TaxonomyProposalApplyResponse(BaseModel):
+    created: int = 0
+    reused: int = 0
+
+
+class TaxonomyInsights(BaseModel):
+    total_documents: int = 0
+    total_concepts: int = 0
+    approved_concepts: int = 0
+    provisional_concepts: int = 0
+    merged_concepts: int = 0
+    singleton_rate: float = 0.0
+    concepts_per_100_documents: float = 0.0
+    possible_duplicate_pairs: int = 0
+    aliases_total: int = 0
+    concepts_with_aliases: int = 0
+    confidence_buckets: dict[str, int] = {}
+
+
 # ---------------------------------------------------------------------------
 # File schemas
 # ---------------------------------------------------------------------------

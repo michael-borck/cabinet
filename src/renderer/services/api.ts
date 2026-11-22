@@ -59,6 +59,12 @@ export const mergeCategory = (sourceId: number, targetId: number) =>
   api.post(`/categories/${sourceId}/merge`, { target_id: targetId }).then(r => r.data)
 export const consolidateCategories = () =>
   api.post('/categories/consolidate').then(r => r.data)
+export const proposeTaxonomy = () =>
+  api.post('/categories/propose').then(r => r.data)
+export const applyTaxonomyProposal = (categories: Record<string, unknown>[]) =>
+  api.post('/categories/propose/apply', { categories }).then(r => r.data)
+export const getTaxonomyInsights = () =>
+  api.get('/insights/taxonomy').then(r => r.data)
 
 // Jobs
 export const getJobs = () => api.get('/jobs').then(r => r.data)

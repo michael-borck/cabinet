@@ -1,9 +1,10 @@
 # Design: Phase 3 — Taxonomy governance
 
-- **Status:** 3a–3c implemented (schema/aliases/provisional concepts,
+- **Status:** 3a–3d implemented (schema/aliases/provisional concepts,
   resolution order, candidate-ID assignment, learning examples,
-  auto-promotion, review inbox, consolidation proposals and approved
-  merge). 3d (two-pass proposal + drift insights) remains optional.
+  auto-promotion, review inbox, consolidation + approved merge, two-pass
+  taxonomy proposal, and drift insights). The automatic consolidation
+  cadence from D12 is not wired (on-demand only).
 - **Date:** 2026-11-23
 - **Scope:** Govern the *vocabulary* of the category tree: stable concepts,
   aliases, provisional concepts, a human review inbox, consolidation, and a
@@ -275,6 +276,14 @@ This is optional for Phase 3 and should ship only after 3a–3c have soaked;
 it changes the user's mental model from "the tree grows as I import" to
 "review the tree, then import".
 
+**Implemented (3d).** `POST /categories/propose` stratifies the facts cache
+by document type (a cheap diversity proxy; up to 40 of 2,000 recent
+documents), asks the chat model for a tree capped at depth 4 / 12 children,
+and returns it without applying anything. `POST /categories/propose/apply`
+resolves the approved tree through the normal resolver, creating concepts as
+`approved` and filling missing definitions; it never assigns files, so the
+next sync does that work. The Insights tab has Propose → preview → Apply.
+
 ## 9. Drift metrics
 
 Expose a small insights panel (and log the numbers in job summaries):
@@ -287,6 +296,14 @@ Expose a small insights panel (and log the numbers in job summaries):
 - confidence distribution of AI assignments.
 
 These are read-only queries over existing rows; no new storage.
+
+**Implemented (3d).** `GET /insights/taxonomy` returns total documents and
+concepts, approved/provisional/merged counts, singleton rate, concepts per
+100 documents, possible-duplicate pairs (≥0.9 embedding cosine or equal
+normalized name), alias totals/coverage, and confidence buckets for AI
+document assignments. The Insights tab renders these as a compact health
+panel. Assignment-level "resolved via alias vs new concept" is not tracked
+yet; the alias totals are the available proxy.
 
 ## 10. Migration and compatibility
 

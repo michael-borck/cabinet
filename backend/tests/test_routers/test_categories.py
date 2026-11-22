@@ -247,3 +247,29 @@ async def test_consolidate_endpoint_deterministic(client: AsyncClient, session):
         {merge["source_id"], merge["target_id"]} == {invoice.id, bills.id}
         for merge in merges
     )
+
+
+async def test_propose_taxonomy_requires_llm(client: AsyncClient):
+    response = await client.post("/api/v1/categories/propose")
+    assert response.status_code == 400
+
+
+async def test_apply_taxonomy_proposal(client: AsyncClient):
+    response = await client.post(
+        "/api/v1/categories/propose/apply",
+        json={
+            "categories": [
+                {
+                    "name": "Finance",
+                    "definition": "Money",
+                    "children": [{"name": "Invoices"}],
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"created": 2, "reused": 0}
+
+    listed = await client.get("/api/v1/categories")
+    names = {category["name"] for category in listed.json()}
+    assert {"Finance", "Invoices"} <= names
