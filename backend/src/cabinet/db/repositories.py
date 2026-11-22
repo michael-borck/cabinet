@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import String, cast, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -425,6 +425,7 @@ class FileRepository:
         status: str | None = None,
         extension: str | None = None,
         source_id: int | None = None,
+        query: str | None = None,
         sort_by: str = "created_at",
         sort_dir: str = "desc",
         offset: int = 0,
@@ -438,6 +439,10 @@ class FileRepository:
             If provided, only return files that belong to this category.
         status / extension / source_id:
             Optional equality filters.
+        query:
+            Server-side text search over filename, path, and cached facts
+            (summary/doc type/topics). ``LIKE`` is sufficient at this scale
+            (design §5.3).
         sort_by:
             Column name to sort by (default ``created_at``).
         sort_dir:
@@ -486,6 +491,30 @@ class FileRepository:
         if source_id is not None:
             base = base.where(File.source_id == source_id)
             count_base = count_base.where(File.source_id == source_id)
+
+        if query is not None and (needle := query.strip()):
+            pattern = f"%{needle}%"
+            # Facts are per document hash, so join through the instance's
+            # document. Exact duplicates share the row.
+            base = base.outerjoin(
+                Document, File.document_id == Document.id
+            ).outerjoin(
+                ContentFact, ContentFact.content_hash == Document.content_hash
+            )
+            count_base = count_base.outerjoin(
+                Document, File.document_id == Document.id
+            ).outerjoin(
+                ContentFact, ContentFact.content_hash == Document.content_hash
+            )
+            matches = or_(
+                File.filename.ilike(pattern),
+                File.path.ilike(pattern),
+                ContentFact.summary.ilike(pattern),
+                ContentFact.doc_type.ilike(pattern),
+                cast(ContentFact.topics, String).ilike(pattern),
+            )
+            base = base.where(matches)
+            count_base = count_base.where(matches)
 
         # Sorting -- allowlisted so arbitrary model attributes (relationships,
         # methods) can't be resolved into the query.

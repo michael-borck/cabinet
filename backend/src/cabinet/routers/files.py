@@ -72,12 +72,13 @@ async def list_files(
     status_filter: str | None = Query(None, alias="status"),
     extension: str | None = Query(None),
     source_id: int | None = Query(None),
+    q: str | None = Query(None, max_length=200),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=500),
     sort_by: str = Query("created_at"),
     session: AsyncSession = Depends(get_session),
 ):
-    """List files with optional filtering and pagination."""
+    """List files with optional filtering, text search, and pagination."""
     offset = (page - 1) * per_page
     files, total = await FileRepository.list_files(
         session,
@@ -85,6 +86,7 @@ async def list_files(
         status=status_filter,
         extension=extension,
         source_id=source_id,
+        query=q,
         sort_by=sort_by,
         offset=offset,
         limit=per_page,

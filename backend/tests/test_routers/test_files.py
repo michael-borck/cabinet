@@ -195,3 +195,43 @@ async def test_get_file_facts_404_when_absent(client: AsyncClient, session: Asyn
 
     response = await client.get(f"/api/v1/files/{file.id}/facts")
     assert response.status_code == 404
+
+
+async def test_list_files_q_searches_facts(
+    client: AsyncClient, session: AsyncSession, tmp_path
+):
+    from cabinet.db.repositories import ContentFactRepository
+
+    source = Source(path=str(tmp_path), recursive=True, store_facts=True)
+    session.add(source)
+    await session.flush()
+    document = Document(content_hash="sha256:qsearch", status="categorized")
+    session.add(document)
+    await session.flush()
+    session.add(
+        File(
+            source_id=source.id,
+            document_id=document.id,
+            content_hash=document.content_hash,
+            path=str(tmp_path / "a.txt"),
+            filename="a.txt",
+            size_bytes=1,
+            status="categorized",
+        )
+    )
+    await ContentFactRepository.upsert(
+        session,
+        content_hash="sha256:qsearch",
+        extractor_version="1",
+        facts_version=1,
+        summary="A consulting invoice for Q1",
+        doc_type="invoice",
+        topics=["billing"],
+    )
+    await session.commit()
+
+    response = await client.get("/api/v1/files", params={"q": "consulting"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["files"][0]["filename"] == "a.txt"

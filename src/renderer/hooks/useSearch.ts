@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { useAllFiles } from '@/hooks/useFiles'
+import { useQuery } from '@tanstack/react-query'
+import { getFiles } from '@/services/api'
 
 interface FileResult {
   id: number
@@ -8,20 +8,19 @@ interface FileResult {
   categories: { id: number; name: string; slug: string; color: string | null }[]
 }
 
+/**
+ * Server-side search (design §5.3): the backend matches filename, path, and
+ * cached facts (summary/doc type/topics), so the client no longer loads every
+ * file just to search.
+ */
 export function useSearch(query: string) {
-  // Loads every page of the files list, so search matches the full set.
-  const { files } = useAllFiles()
+  const q = query.trim()
+  const { data } = useQuery({
+    queryKey: ['file-search', q],
+    queryFn: () => getFiles({ q, per_page: 50 }),
+    enabled: q.length > 0,
+    staleTime: 10_000,
+  })
 
-  const results = useMemo(() => {
-    const q = query.toLowerCase().trim()
-    if (!q || files.length === 0) return []
-
-    return (files as unknown as FileResult[]).filter((file) => {
-      if (file.filename.toLowerCase().includes(q)) return true
-      if (file.categories?.some((c) => c.name.toLowerCase().includes(q))) return true
-      return false
-    })
-  }, [query, files])
-
-  return { results }
+  return { results: (data?.files ?? []) as FileResult[] }
 }

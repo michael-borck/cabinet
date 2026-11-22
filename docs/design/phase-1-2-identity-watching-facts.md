@@ -1,6 +1,7 @@
 # Design: Phase 1 (content identity + folder watching) and Phase 2 (facts cache)
 
-- **Status:** Draft for review — Phase 1a/1b and Phase 2a implemented.
+- **Status:** Draft for review — Phase 1a/1b and Phase 2a implemented;
+  Phase 2b in progress (server-side search done).
   Decisions D1–D4 and D7 settled 2026-11-22 (§7); D5–D6 remain open
 - **Date:** 2026-11-22
 - **Scope:** Phase 1a content-based file identity, Phase 1b folder watching,
@@ -456,7 +457,9 @@ without the client loading every file:
 
 - **Server-side text search** over `summary`/`topics`/filename via a new
   `GET /files?q=` filter (SQL `LIKE` is fine at this scale; FTS5 over
-  summaries if ranking is wanted).
+  summaries if ranking is wanted). **Implemented:** `q` matches filename,
+  path, summary, doc type, and topics (the JSON topics column is cast to
+  text). The renderer's search box uses it instead of loading every file.
 - **Opt-in full-text index:** an FTS5 virtual table over extracted text,
   keyed by hash, populated only for sources with `store_text_index`
   enabled (§5.4). This consciously re-introduces what `_cleanup_legacy_fts`
