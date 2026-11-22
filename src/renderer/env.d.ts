@@ -22,6 +22,7 @@ declare global {
     }
     api: {
       getApiToken: () => Promise<string>
+      getBackendPort: () => Promise<number>
       selectFolder: () => Promise<string | null>
       revealInFinder: (path: string) => Promise<void>
       openFile: (path: string) => Promise<void>

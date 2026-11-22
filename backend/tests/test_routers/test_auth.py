@@ -60,3 +60,17 @@ async def test_health_exempt_from_token(token_client: AsyncClient):
 async def test_no_token_configured_leaves_api_open(client: AsyncClient):
     response = await client.get("/api/v1/sources")
     assert response.status_code == 200
+
+
+async def test_null_origin_allowed_for_packaged_renderer(client: AsyncClient):
+    """The file:// renderer sends Origin: null; preflight must pass."""
+    response = await client.options(
+        "/api/v1/files",
+        headers={
+            "Origin": "null",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-api-token",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "null"

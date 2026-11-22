@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Cabinet is a desktop app that uses AI to categorize files into virtual folders. Electron frontend talks to a Python FastAPI backend over HTTP on port 8420.
+Cabinet is a desktop app that uses AI to categorize files into virtual folders. Electron main picks a free local port per launch (8420 when run standalone) and the renderer talks to the Python FastAPI backend over HTTP on it.
 
 ## Architecture
 

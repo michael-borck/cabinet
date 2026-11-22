@@ -16,7 +16,7 @@ only inside Cabinet. Phases are sequential slices, each shippable alone.
 | 2a | Facts cache (Tier 1): per-document summary / entities / topics / provenance locators, fuzzy fingerprint | **Implemented** (summary/type/entities/topics/provenance; fuzzy fingerprint deferred to 2b) | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
 | 2b | Document-level embeddings (organisation, not RAG; SQLite, no vector DB), server-side search, opt-in Tier 2 full-text (FTS) index, near-duplicate/version clusters | **Implemented** (embeddings, server-side search, opt-in FTS, SimHash/stem/folder version clusters; cluster category inheritance still a follow-up) | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
 | 3 | Concept governance (below): canonical concepts + aliases/synonyms, provisional concepts, consolidation pass, learning from manual corrections | **Implemented** (3a–3d: concepts/aliases/resolution, candidate-ID assignment, review inbox, consolidation/merge, two-pass proposal + drift insights) | [Phase 3 design](design/phase-3-taxonomy-governance.md) |
-| 4 | Views, not one tree: multiple saved projections/facets over facts+concepts (topic, document type, project, people, date) — the "dynamic / personal taxonomy" phase, cheap because views are DB lookups over Phase 2 facts | Discussed only | — |
+| 4 | Views, not one tree: multiple saved projections/facets over facts+concepts (topic, document type, project, people, date) — the "dynamic / personal taxonomy" phase, cheap because views are DB lookups over Phase 2 facts | **Designed** (draft for review) | [Phase 4 design](design/phase-4-views.md) |
 | 5 | Projecting the view outward (below): portable curation sidecar first, then symlink-tree export, Finder tags, Obsidian-vault export (markdown stub + frontmatter per document) | Discussed (notes below) | — |
 
 Decisions settled 2026-11-22 (Phase 1+2 design doc, §7): D1 watch default
@@ -39,7 +39,6 @@ period, and Phase 3's D8–D12 in its design doc.
 - OCR fallback when a PDF extracts near-zero text; PPTX extractor.
 - API keys into the OS keychain (Electron `safeStorage`) instead of
   plaintext SQLite.
-- Dynamic backend port instead of fixed 8420.
 - Frontend tests (none today; backend has pytest coverage).
 
 ## Phase 3 — Taxonomy governance — "bounded structure, unbounded vocabulary" (designed)

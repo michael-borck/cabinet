@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'fs'
 import { isAbsolute, join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
-import { getApiToken, startBackend, stopBackend } from './backend'
+import { getApiToken, getBackendPort, startBackend, stopBackend } from './backend'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -131,6 +131,7 @@ app.on('will-quit', (event) => {
 
 // IPC handlers
 ipcMain.handle('get-api-token', () => getApiToken())
+ipcMain.handle('get-backend-port', () => getBackendPort())
 
 ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog({

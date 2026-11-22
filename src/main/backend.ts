@@ -1,19 +1,37 @@
 import { ChildProcess, spawn } from 'child_process'
 import { randomBytes } from 'crypto'
+import { createServer } from 'net'
 import { join } from 'path'
 import { app } from 'electron'
 import { is } from '@electron-toolkit/utils'
 
 let backendProcess: ChildProcess | null = null
-const BACKEND_PORT = 8420
+// Chosen per launch so a fixed port collision doesn't break the app.
+let backendPort = 8420
 
 // Per-launch shared secret: the backend rejects API requests without it, so
 // other local processes can't read settings (LLM key) or register sources.
 const API_TOKEN = randomBytes(32).toString('hex')
 
+async function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.unref()
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = address && typeof address === 'object' ? address.port : 0
+      server.close(() => resolve(port))
+    })
+  })
+}
+
 export async function startBackend(): Promise<void> {
   // Idempotent: ignore double-starts while a backend is already running
   if (backendProcess) return
+
+  const freePort = await findFreePort()
+  backendPort = freePort || 8420
 
   if (is.dev) {
     // Development: use uv to run from source
@@ -27,7 +45,7 @@ export async function startBackend(): Promise<void> {
         'cabinet.app:create_app',
         '--factory',
         '--port',
-        String(BACKEND_PORT),
+        String(backendPort),
         '--host',
         '127.0.0.1'
       ],
@@ -42,7 +60,7 @@ export async function startBackend(): Promise<void> {
     const ext = process.platform === 'win32' ? '.exe' : ''
     const backendPath = join(process.resourcesPath, 'backend', `cabinet-api${ext}`)
 
-    backendProcess = spawn(backendPath, ['--port', String(BACKEND_PORT), '--host', '127.0.0.1'], {
+    backendProcess = spawn(backendPath, ['--port', String(backendPort), '--host', '127.0.0.1'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, CABINET_API_TOKEN: API_TOKEN }
     })
@@ -117,7 +135,7 @@ export function stopBackend(): Promise<void> {
 async function waitForBackend(maxRetries = 30, delay = 1000): Promise<void> {
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const response = await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/v1/health`)
+      const response = await fetch(`http://127.0.0.1:${backendPort}/api/v1/health`)
       if (response.ok) return
     } catch {
       // Backend not ready yet
@@ -128,7 +146,7 @@ async function waitForBackend(maxRetries = 30, delay = 1000): Promise<void> {
 }
 
 export function getBackendPort(): number {
-  return BACKEND_PORT
+  return backendPort
 }
 
 export function getApiToken(): string {

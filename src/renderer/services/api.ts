@@ -1,7 +1,29 @@
 import axios from 'axios'
 
+const FALLBACK_PORT = 8420
+
+// The Electron main process picks a free port per launch (falling back to
+// 8420 outside Electron), so resolve the base URL before the first request.
+let baseUrlPromise: Promise<string> | null = null
+
+function resolveBaseUrl(): Promise<string> {
+  if (!baseUrlPromise) {
+    baseUrlPromise = (async () => {
+      if (window.api?.getBackendPort) {
+        try {
+          const port = await window.api.getBackendPort()
+          if (port) return `http://127.0.0.1:${port}/api/v1`
+        } catch {
+          // Fall through to the standalone default.
+        }
+      }
+      return `http://127.0.0.1:${FALLBACK_PORT}/api/v1`
+    })()
+  }
+  return baseUrlPromise
+}
+
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:8420/api/v1',
   timeout: 30000,
 })
 
@@ -11,6 +33,9 @@ const api = axios.create({
 let apiTokenPromise: Promise<string | null> | null = null
 
 api.interceptors.request.use(async (config) => {
+  if (!config.baseURL) {
+    config.baseURL = await resolveBaseUrl()
+  }
   if (!apiTokenPromise) {
     apiTokenPromise = window.api?.getApiToken
       ? window.api.getApiToken().catch(() => null)
