@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart } from 'lucide-react'
+import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff } from 'lucide-react'
 import { isAxiosError } from 'axios'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -25,6 +25,8 @@ interface SourceRow {
   path: string
   label: string | null
   exclude_patterns: string[]
+  watch_enabled: boolean
+  availability: string
 }
 
 function SourcesTab() {
@@ -70,6 +72,12 @@ function SourcesTab() {
     )
     if (ok) scanMut.mutate({ id: s.id, mode: 'full_reindex' })
   }
+  const watchMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      updateSource(id, { watch_enabled: enabled }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.sources }) },
+    onError: (err) => { toast.error(`Failed to update watching: ${errorDetail(err)}`) },
+  })
   const excludesMut = useMutation({
     mutationFn: ({ id, patterns }: { id: number; patterns: string[] }) =>
       updateSource(id, { exclude_patterns: patterns }),
@@ -106,8 +114,23 @@ function SourcesTab() {
         {sources?.map((s: SourceRow) => (
           <div key={s.id} className="rounded-md border p-2 text-sm">
             <div className="flex items-center justify-between">
-              <span className="truncate">{s.label || s.path}</span>
+              <span className="truncate">
+                {s.label || s.path}
+                {s.availability === 'unavailable' && (
+                  <span className="ml-2 text-xs text-muted-foreground">(not connected)</span>
+                )}
+              </span>
               <div className="flex shrink-0 gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title={s.watch_enabled ? 'Stop watching for changes' : 'Watch for changes'}
+                  className={s.watch_enabled ? 'text-primary' : undefined}
+                  disabled={watchMut.isPending}
+                  onClick={() => watchMut.mutate({ id: s.id, enabled: !s.watch_enabled })}
+                >
+                  {s.watch_enabled ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                </Button>
                 <Button
                   variant="ghost"
                   size="sm"

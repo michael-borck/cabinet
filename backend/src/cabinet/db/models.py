@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 from sqlalchemy import (
@@ -33,10 +34,27 @@ class Source(Base):
     # User-defined glob excludes for the scanner; NULL means none. Built-in
     # default exclusions (node_modules, __pycache__, ...) live in the scanner.
     exclude_patterns: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Folder watching (Phase 1b, D1): opt-in per source.
+    watch_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+    # Removable-volume rebinding: volume identity + source root relative to
+    # the volume root, so a drive remounting elsewhere can be found again.
+    volume_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    volume_rel_path: Mapped[str | None] = mapped_column(String, nullable=True)
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+    @property
+    def availability(self) -> str:
+        """Derived at read time: ``available`` or ``unavailable`` (root gone).
+
+        Never persisted — an unplugged drive writes no row updates, and its
+        files are shown from stored data, not marked missing.
+        """
+        return "available" if os.path.isdir(self.path) else "unavailable"
 
     files: Mapped[list[File]] = relationship(
         "File", back_populates="source", cascade="all, delete-orphan"
@@ -257,6 +275,10 @@ class Job(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_type: Mapped[str] = mapped_column(String, nullable=False)  # 'quick_sync' or 'full_reindex'
+    # What started the job: 'manual' | 'watch' | 'launch' | 'periodic'.
+    trigger: Mapped[str] = mapped_column(
+        String, nullable=False, default="manual", server_default="manual"
+    )
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     source_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("sources.id", ondelete="SET NULL"), nullable=True

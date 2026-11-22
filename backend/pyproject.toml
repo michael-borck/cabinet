@@ -21,6 +21,7 @@ dependencies = [
     "anthropic>=0.39",
     "openai>=1.50",
     "google-genai>=1.0",
+    "watchdog>=4.0",
 ]
 
 [dependency-groups]

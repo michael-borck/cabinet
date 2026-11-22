@@ -23,9 +23,9 @@ api.interceptors.request.use(async (config) => {
 
 // Sources
 export const getSources = () => api.get('/sources').then(r => r.data)
-export const createSource = (data: { path: string; label?: string; recursive?: boolean; exclude_patterns?: string[] }) =>
+export const createSource = (data: { path: string; label?: string; recursive?: boolean; exclude_patterns?: string[]; watch_enabled?: boolean }) =>
   api.post('/sources', data).then(r => r.data)
-export const updateSource = (id: number, data: { label?: string; recursive?: boolean; exclude_patterns?: string[] }) =>
+export const updateSource = (id: number, data: { label?: string; recursive?: boolean; exclude_patterns?: string[]; watch_enabled?: boolean }) =>
   api.patch(`/sources/${id}`, data).then(r => r.data)
 export const deleteSource = (id: number) => api.delete(`/sources/${id}`)
 export const scanSource = (id: number, mode: string = 'quick_sync') =>

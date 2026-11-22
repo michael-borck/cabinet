@@ -9,6 +9,7 @@ from cabinet.db.engine import get_session
 from cabinet.db.repositories import (
     CategoryRepository,
     FileRepository,
+    SourceRepository,
     effective_categories,
 )
 from cabinet.schemas import (
@@ -174,6 +175,8 @@ async def get_category_files(
     )
 
     # Build file responses with categories.
+    all_sources = await SourceRepository.list_all(session)
+    source_available = {s.id: s.availability == "available" for s in all_sources}
     file_responses: list[FileResponse] = []
     for f in files:
         detailed = await FileRepository.get_by_id(session, f.id)
@@ -199,6 +202,13 @@ async def get_category_files(
                     size_bytes=detailed.size_bytes,
                     mime_type=detailed.mime_type,
                     status=detailed.status,
+                    availability=(
+                        "missing"
+                        if detailed.status == "missing"
+                        else "available"
+                        if source_available.get(detailed.source_id, True)
+                        else "source_unavailable"
+                    ),
                     file_modified_at=detailed.file_modified_at,
                     created_at=detailed.created_at,
                     updated_at=detailed.updated_at,

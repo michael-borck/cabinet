@@ -19,10 +19,13 @@ from cabinet.schemas import (
     SourceResponse,
     SourceUpdate,
 )
-from cabinet.services.pipeline import PipelineService
-from cabinet.services.scanner import ScannerService
+from cabinet.services.sync import run_scan_and_pipeline
 
 router = APIRouter(prefix="/sources", tags=["sources"])
+
+# Note: the folder watcher picks up create/update/delete changes by
+# re-reading watched sources on its own short refresh tick, so these
+# endpoints need no watcher coupling (and no commit-ordering concerns).
 
 
 @router.get("", response_model=list[SourceResponse])
@@ -54,6 +57,7 @@ async def create_source(
         label=body.label,
         recursive=body.recursive,
         exclude_patterns=body.exclude_patterns,
+        watch_enabled=body.watch_enabled,
     )
     return source
 
@@ -95,37 +99,8 @@ async def delete_source(
 
 
 async def _run_scan_and_pipeline(source_id: int, mode: str, job_id: int) -> None:
-    """Background task that runs the scanner followed by the pipeline.
-
-    Opens its own session so the request handler can return immediately.
-    """
-    async with async_session_factory() as session:
-        try:
-            scanner = ScannerService(session)
-            await scanner.scan_source(source_id, mode=mode, job_id=job_id)
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            # Mark the job as failed so the client can observe the error.
-            async with async_session_factory() as err_session:
-                await JobRepository.update_progress(
-                    err_session, job_id, status="failed"
-                )
-                await err_session.commit()
-            return
-
-    async with async_session_factory() as session:
-        try:
-            pipeline = PipelineService(session)
-            await pipeline.process_pending_files(job_id)
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            async with async_session_factory() as err_session:
-                await JobRepository.update_progress(
-                    err_session, job_id, status="failed"
-                )
-                await err_session.commit()
+    """Background task: shared scanner+pipeline runner (services/sync)."""
+    await run_scan_and_pipeline(async_session_factory, source_id, mode, job_id)
 
 
 @router.post(

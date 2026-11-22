@@ -30,6 +30,7 @@ class SourceCreate(BaseModel):
     label: str | None = None
     recursive: bool = True
     exclude_patterns: list[str] = Field(default_factory=list)
+    watch_enabled: bool = False
 
     _clean = field_validator("exclude_patterns")(_clean_patterns)
 
@@ -38,6 +39,7 @@ class SourceUpdate(BaseModel):
     label: str | None = None
     recursive: bool | None = None
     exclude_patterns: list[str] | None = None
+    watch_enabled: bool | None = None
 
     _clean = field_validator("exclude_patterns")(_clean_patterns)
 
@@ -50,6 +52,9 @@ class SourceResponse(BaseModel):
     label: str | None
     recursive: bool
     exclude_patterns: list[str] = Field(default_factory=list)
+    watch_enabled: bool = False
+    # Derived at read time from the filesystem ("available" / "unavailable").
+    availability: str = "available"
     last_scanned_at: datetime | None
     created_at: datetime
 
@@ -128,6 +133,8 @@ class FileResponse(BaseModel):
     size_bytes: int
     mime_type: str | None
     status: str
+    # "available" | "source_unavailable" | "missing" (derived, design §4.4).
+    availability: str = "available"
     file_modified_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -154,6 +161,7 @@ class JobResponse(BaseModel):
 
     id: int
     job_type: str
+    trigger: str = "manual"
     status: str
     source_id: int | None
     total_files: int

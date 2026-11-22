@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     log_level: str = "info"
     extraction_max_chars: int = 50000
     categorization_batch_size: int = 10
+    # Folder watching (Phase 1b). The master switch only gates the watcher
+    # service; per-source ``watch_enabled`` still decides what is watched.
+    watch_enabled: bool = True
+    watch_debounce_seconds: float = 3.0
+    watch_max_wait_seconds: float = 15.0
+    # Periodic reconcile safety net for watch-enabled sources; 0 disables.
+    watch_poll_interval_seconds: int = 1800
 
     model_config = {"env_prefix": "CABINET_"}
 

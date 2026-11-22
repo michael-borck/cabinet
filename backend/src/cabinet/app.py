@@ -23,7 +23,21 @@ async def lifespan(app: FastAPI):
         await session.commit()
     if swept:
         logger.info("Marked %d interrupted job(s) from a previous run as failed", swept)
-    yield
+
+    # Folder watching (Phase 1b). A watcher failure must never take the API
+    # down with it — manual sync and launch-time state still work.
+    from cabinet.services.watcher import WatcherService
+
+    watcher = WatcherService(async_session_factory, get_settings())
+    app.state.watcher = watcher
+    try:
+        await watcher.start()
+    except Exception:
+        logger.exception("Folder watcher failed to start; continuing without it")
+    try:
+        yield
+    finally:
+        await watcher.stop()
 
 
 def create_app() -> FastAPI:

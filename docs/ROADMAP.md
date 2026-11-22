@@ -11,8 +11,8 @@ only inside Cabinet. Phases are sequential slices, each shippable alone.
 
 | Phase | Theme | Status | Design |
 |---|---|---|---|
-| 1a | Content-based identity: document/instance split (one document per hash, many path instances), inode+hash move detection, filesystem capability ladder | **Implemented** (backend; uncommitted pending review) | [Phase 1+2 design §3](design/phase-1-2-identity-watching-facts.md) |
-| 1b | Folder watching (debounced reconcile, launch/periodic safety nets, removable-drive "unavailable" state + volume rebinding, cloud-placeholder deferral) | Designed, not started; **gated on 1a** | [Phase 1+2 design §4](design/phase-1-2-identity-watching-facts.md) |
+| 1a | Content-based identity: document/instance split (one document per hash, many path instances), inode+hash move detection, filesystem capability ladder | **Implemented** (backend) | [Phase 1+2 design §3](design/phase-1-2-identity-watching-facts.md) |
+| 1b | Folder watching (debounced reconcile, launch/periodic safety nets, removable-drive "unavailable" state + volume rebinding, cloud-placeholder deferral) | **Implemented** (backend + minimal UI; cloud-placeholder deferral still open, D4) | [Phase 1+2 design §4](design/phase-1-2-identity-watching-facts.md) |
 | 2a | Facts cache (Tier 1): per-document summary / entities / topics / provenance locators, fuzzy fingerprint | Designed, not started | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
 | 2b | Document-level embeddings (organisation, not RAG; SQLite, no vector DB), server-side search, opt-in Tier 2 full-text (FTS) index, near-duplicate/version clusters | Designed, not started | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
 | 3 | Concept governance (below): canonical concepts + aliases/synonyms, provisional concepts, consolidation pass, learning from manual corrections | Discussed (notes below), needs its own design doc | — |

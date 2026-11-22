@@ -129,14 +129,20 @@ export function FileDetailsPanel() {
               <span className="text-muted-foreground">Status</span>
               <span>{file.status}</span>
             </div>
+            {file.availability && file.availability !== 'available' && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Availability</span>
+                <span>{file.availability === 'missing' ? 'Missing' : 'Drive not connected'}</span>
+              </div>
+            )}
           </div>
 
           {/* Actions */}
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => window.api.revealInFinder(file.path)}>
+            <Button variant="outline" size="sm" disabled={file.availability !== undefined && file.availability !== 'available'} title={file.availability !== undefined && file.availability !== 'available' ? 'File is not currently reachable' : undefined} onClick={() => window.api.revealInFinder(file.path)}>
               <FolderOpen className="mr-1 h-3 w-3" /> Reveal
             </Button>
-            <Button variant="outline" size="sm" onClick={() => window.api.openFile(file.path)}>
+            <Button variant="outline" size="sm" disabled={file.availability !== undefined && file.availability !== 'available'} title={file.availability !== undefined && file.availability !== 'available' ? 'File is not currently reachable' : undefined} onClick={() => window.api.openFile(file.path)}>
               <ExternalLink className="mr-1 h-3 w-3" /> Open
             </Button>
           </div>

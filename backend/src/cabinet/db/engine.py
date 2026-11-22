@@ -255,6 +255,11 @@ _ADDED_COLUMNS = [
     ("files", "device_id", "INTEGER"),
     ("files", "inode", "INTEGER"),
     ("jobs", "moved_count", "INTEGER NOT NULL DEFAULT 0"),
+    # Phase 1b: folder watching.
+    ("sources", "watch_enabled", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("sources", "volume_id", "VARCHAR"),
+    ("sources", "volume_rel_path", "VARCHAR"),
+    ("jobs", "trigger", "VARCHAR NOT NULL DEFAULT 'manual'"),
 ]
 
 

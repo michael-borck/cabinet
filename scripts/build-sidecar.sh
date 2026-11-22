@@ -70,6 +70,13 @@ pyinstaller --onefile \
   --hidden-import python_multipart \
   --hidden-import multipart \
   --hidden-import starlette.formparsers \
+  --hidden-import watchdog \
+  --hidden-import watchdog.events \
+  --hidden-import watchdog.observers \
+  --hidden-import watchdog.observers.fsevents \
+  --hidden-import watchdog.observers.inotify \
+  --hidden-import watchdog.observers.read_directory_changes \
+  --hidden-import watchdog.observers.polling \
   --exclude-module torch \
   --exclude-module tensorflow \
   --exclude-module keras \

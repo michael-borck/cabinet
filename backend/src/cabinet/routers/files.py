@@ -12,6 +12,7 @@ from cabinet.db.repositories import (
     CategoryRepository,
     DocumentRepository,
     FileRepository,
+    SourceRepository,
     effective_categories,
 )
 from cabinet.schemas import (
@@ -24,12 +25,19 @@ from cabinet.schemas import (
 router = APIRouter(prefix="/files", tags=["files"])
 
 
-def _build_file_response(file) -> FileResponse:
+def _build_file_response(file, *, source_available: bool = True) -> FileResponse:
     """Convert a File ORM instance into a FileResponse schema.
 
     ``categories`` is the merged effective set: document-level assignments
     plus any per-instance additions (see ``effective_categories``).
+    ``availability`` is derived at read time (design §4.4).
     """
+    if file.status == "missing":
+        availability = "missing"
+    elif not source_available:
+        availability = "source_unavailable"
+    else:
+        availability = "available"
     cats: list[CategoryBrief] = [
         CategoryBrief(
             id=category.id,
@@ -51,6 +59,7 @@ def _build_file_response(file) -> FileResponse:
         size_bytes=file.size_bytes,
         mime_type=file.mime_type,
         status=file.status,
+        availability=availability,
         file_modified_at=file.file_modified_at,
         created_at=file.created_at,
         updated_at=file.updated_at,
@@ -83,7 +92,13 @@ async def list_files(
     )
 
     # Categories are eager-loaded by list_files; no per-file queries needed.
-    file_responses = [_build_file_response(f) for f in files]
+    # Source availability is one stat per source, cached for this request.
+    sources = await SourceRepository.list_all(session)
+    available = {s.id: s.availability == "available" for s in sources}
+    file_responses = [
+        _build_file_response(f, source_available=available.get(f.source_id, True))
+        for f in files
+    ]
 
     return FileListResponse(
         files=file_responses,
@@ -105,7 +120,11 @@ async def get_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File {file_id} not found",
         )
-    return _build_file_response(file)
+    source = await SourceRepository.get_by_id(session, file.source_id)
+    return _build_file_response(
+        file,
+        source_available=source is None or source.availability == "available",
+    )
 
 
 @router.post(

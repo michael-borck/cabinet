@@ -27,6 +27,7 @@ from cabinet.db.models import (
     Source,
 )
 from cabinet.utils.hashing import prefixed_hash
+from cabinet.utils.volumes import describe_source_root
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -76,6 +77,13 @@ class SourceRepository:
         return await session.get(Source, source_id)
 
     @staticmethod
+    async def list_watched(session: AsyncSession) -> Sequence[Source]:
+        result = await session.execute(
+            select(Source).where(Source.watch_enabled == True)  # noqa: E712
+        )
+        return result.scalars().all()
+
+    @staticmethod
     async def create(
         session: AsyncSession,
         *,
@@ -83,12 +91,17 @@ class SourceRepository:
         label: str | None = None,
         recursive: bool = True,
         exclude_patterns: list[str] | None = None,
+        watch_enabled: bool = False,
     ) -> Source:
+        volume_id, volume_rel_path = describe_source_root(path)
         source = Source(
             path=path,
             label=label,
             recursive=recursive,
             exclude_patterns=exclude_patterns or None,
+            watch_enabled=watch_enabled,
+            volume_id=volume_id,
+            volume_rel_path=volume_rel_path,
         )
         session.add(source)
         await session.flush()
@@ -771,11 +784,13 @@ class JobRepository:
         job_type: str,
         source_id: int | None = None,
         total_files: int = 0,
+        trigger: str = "manual",
     ) -> Job:
         job = Job(
             job_type=job_type,
             source_id=source_id,
             total_files=total_files,
+            trigger=trigger,
         )
         session.add(job)
         await session.flush()

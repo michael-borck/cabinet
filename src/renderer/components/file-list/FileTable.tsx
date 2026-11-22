@@ -19,6 +19,7 @@ interface FileItem {
   extension: string | null
   size_bytes: number
   status: string
+  availability?: string
   categories: { id: number; name: string; slug: string; color: string | null }[]
 }
 
@@ -84,11 +85,20 @@ export function FileTable() {
                 style={{ top: `${vItem.start}px`, height: `${vItem.size}px` }}
                 onClick={() => setSelectedFile(file.id)}
               >
-                <span className="flex flex-1 items-center gap-2 truncate">
+                <span className={cn(
+                  'flex flex-1 items-center gap-2 truncate',
+                  file.availability && file.availability !== 'available' && 'opacity-50'
+                )}>
                   <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <span className="truncate">{file.filename}</span>
                   {file.extension && (
                     <span className="text-xs text-muted-foreground">{file.extension}</span>
+                  )}
+                  {file.availability === 'source_unavailable' && (
+                    <span className="text-xs text-muted-foreground">(drive not connected)</span>
+                  )}
+                  {file.availability === 'missing' && (
+                    <span className="text-xs text-muted-foreground">(missing)</span>
                   )}
                 </span>
                 <span className="w-24 text-right text-xs text-muted-foreground">
