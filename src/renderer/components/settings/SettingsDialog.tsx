@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory, proposeTaxonomy, applyTaxonomyProposal, getTaxonomyInsights, exportCuration, importCuration, planSymlinkExport, applySymlinkExport, type SymlinkTreePlan, type SymlinkTreeResult, type SymlinkTreeRequest } from '@/services/api'
+import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory, proposeTaxonomy, applyTaxonomyProposal, getTaxonomyInsights, exportCuration, importCuration, planSymlinkExport, applySymlinkExport, planFinderTags, applyFinderTags, planObsidianExport, applyObsidianExport, type SymlinkTreePlan, type SymlinkTreeResult, type SymlinkTreeRequest, type FinderTagsPlan, type FinderTagsResult, type VaultExportPlan, type VaultExportResult, type VaultExportRequest } from '@/services/api'
 import { useViews } from '@/hooks/useViews'
 import { queryKeys } from '@/services/apiClient'
 import { useSelectionStore } from '@/stores/selectionStore'
@@ -880,6 +880,15 @@ function ExportTab() {
   const [plan, setPlan] = useState<SymlinkTreePlan | null>(null)
   const [result, setResult] = useState<SymlinkTreeResult | null>(null)
   const [busy, setBusy] = useState(false)
+  const [tagPlan, setTagPlan] = useState<FinderTagsPlan | null>(null)
+  const [tagResult, setTagResult] = useState<FinderTagsResult | null>(null)
+  const [tagBusy, setTagBusy] = useState(false)
+  const [vaultDir, setVaultDir] = useState('')
+  const [vaultScope, setVaultScope] = useState<'library' | 'view'>('library')
+  const [vaultViewId, setVaultViewId] = useState('')
+  const [vaultPlan, setVaultPlan] = useState<VaultExportPlan | null>(null)
+  const [vaultResult, setVaultResult] = useState<VaultExportResult | null>(null)
+  const [vaultBusy, setVaultBusy] = useState(false)
 
   const buildRequest = (): SymlinkTreeRequest | null => {
     if (!targetDir.trim()) {
@@ -941,6 +950,105 @@ function ExportTab() {
       toast.error(`Export failed: ${errorDetail(err)}`)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const previewTags = async () => {
+    setTagBusy(true)
+    try {
+      setTagPlan(await planFinderTags())
+      setTagResult(null)
+    } catch (err) {
+      toast.error(`Finder tag preview failed: ${errorDetail(err)}`)
+    } finally {
+      setTagBusy(false)
+    }
+  }
+
+  const applyTags = async () => {
+    if (
+      !window.confirm(
+        'Add each document’s concepts as Finder tags? Existing tags are kept.'
+      )
+    ) {
+      return
+    }
+    setTagBusy(true)
+    try {
+      const applied = await applyFinderTags()
+      setTagResult(applied)
+      setTagPlan(null)
+      if (applied.supported) {
+        toast.success(`Tagged ${applied.tagged} files`)
+      } else {
+        toast.error(applied.message || 'Finder tags are not supported here')
+      }
+    } catch (err) {
+      toast.error(`Finder tag export failed: ${errorDetail(err)}`)
+    } finally {
+      setTagBusy(false)
+    }
+  }
+
+  const chooseVault = async () => {
+    const path = await window.api.selectFolder()
+    if (path) {
+      setVaultDir(path)
+      setVaultPlan(null)
+      setVaultResult(null)
+    }
+  }
+
+  const buildVaultRequest = (): VaultExportRequest | null => {
+    if (!vaultDir.trim()) {
+      toast.error('Choose a vault folder')
+      return null
+    }
+    if (vaultScope === 'view' && !vaultViewId) {
+      toast.error('Choose a view')
+      return null
+    }
+    return {
+      target_dir: vaultDir.trim(),
+      scope: vaultScope,
+      view_id: vaultScope === 'view' ? Number(vaultViewId) : null,
+    }
+  }
+
+  const previewVault = async () => {
+    const request = buildVaultRequest()
+    if (!request) return
+    setVaultBusy(true)
+    try {
+      setVaultPlan(await planObsidianExport(request))
+      setVaultResult(null)
+    } catch (err) {
+      toast.error(`Vault preview failed: ${errorDetail(err)}`)
+    } finally {
+      setVaultBusy(false)
+    }
+  }
+
+  const applyVault = async () => {
+    const request = buildVaultRequest()
+    if (!request) return
+    if (
+      !window.confirm(
+        'Write markdown catalogue cards under the Cabinet folder? Existing notes are never overwritten.'
+      )
+    ) {
+      return
+    }
+    setVaultBusy(true)
+    try {
+      const applied = await applyObsidianExport(request)
+      setVaultResult(applied)
+      setVaultPlan(null)
+      toast.success(`Created ${applied.created} note(s)`)
+    } catch (err) {
+      toast.error(`Vault export failed: ${errorDetail(err)}`)
+    } finally {
+      setVaultBusy(false)
     }
   }
 
@@ -1065,6 +1173,140 @@ function ExportTab() {
           )}
         </div>
       )}
+
+      <div className="space-y-2 border-t pt-4">
+        <h3 className="text-sm font-medium">Finder tags (macOS)</h3>
+        <p className="text-xs text-muted-foreground">
+          Add each document’s concepts as native Finder tags. This is additive:
+          existing tags (and their colours) are kept, and stale Cabinet tags are
+          not removed.
+        </p>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={tagBusy}
+            onClick={previewTags}
+          >
+            Preview tags
+          </Button>
+          <Button
+            size="sm"
+            disabled={tagBusy || (tagPlan !== null && !tagPlan.supported)}
+            onClick={applyTags}
+          >
+            Apply tags
+          </Button>
+        </div>
+        {tagPlan && !tagPlan.supported && (
+          <p className="text-xs text-destructive">{tagPlan.message}</p>
+        )}
+        {tagPlan?.supported && (
+          <p className="text-xs text-muted-foreground">
+            {tagPlan.files} files · {tagPlan.tagged} to tag ·{' '}
+            {tagPlan.skipped} already tagged
+          </p>
+        )}
+        {tagResult && (
+          <p className="text-xs text-muted-foreground">
+            {tagResult.supported
+              ? `${tagResult.tagged} tagged · ${tagResult.skipped} skipped`
+              : tagResult.message}
+            {tagResult.errors.length > 0 && (
+              <span className="text-destructive">
+                {' '}
+                · {tagResult.errors.length} error(s)
+              </span>
+            )}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2 border-t pt-4">
+        <h3 className="text-sm font-medium">Obsidian vault</h3>
+        <p className="text-xs text-muted-foreground">
+          Write one markdown catalogue card per document under a Cabinet folder:
+          facts as frontmatter, concepts as tags, and a link to the original.
+          Existing notes are never overwritten.
+        </p>
+        <div>
+          <label className="text-xs text-muted-foreground">Vault folder</label>
+          <div className="mt-1 flex gap-2">
+            <Input
+              value={vaultDir}
+              onChange={(event) => setVaultDir(event.target.value)}
+              placeholder="/Users/you/Vault"
+            />
+            <Button variant="outline" onClick={chooseVault}>
+              Choose…
+            </Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-muted-foreground">Scope</label>
+            <select
+              value={vaultScope}
+              onChange={(event) => {
+                setVaultScope(event.target.value as 'library' | 'view')
+                setVaultPlan(null)
+                setVaultResult(null)
+              }}
+              className="mt-1 flex h-10 w-full rounded-md border bg-background px-3 text-sm"
+            >
+              <option value="library">Whole library</option>
+              <option value="view">A saved view</option>
+            </select>
+          </div>
+          {vaultScope === 'view' && (
+            <div>
+              <label className="text-xs text-muted-foreground">View</label>
+              <select
+                value={vaultViewId}
+                onChange={(event) => {
+                  setVaultViewId(event.target.value)
+                  setVaultPlan(null)
+                  setVaultResult(null)
+                }}
+                className="mt-1 flex h-10 w-full rounded-md border bg-background px-3 text-sm"
+              >
+                <option value="">Choose a view…</option>
+                {(views ?? []).map((view: { id: number; name: string }) => (
+                  <option key={view.id} value={view.id}>
+                    {view.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={vaultBusy}
+            onClick={previewVault}
+          >
+            Preview notes
+          </Button>
+          <Button size="sm" disabled={vaultBusy} onClick={applyVault}>
+            Export vault
+          </Button>
+        </div>
+        {vaultPlan && (
+          <p className="text-xs text-muted-foreground">
+            {vaultPlan.notes} notes · {vaultPlan.creates} to create ·{' '}
+            {vaultPlan.conflicts} existing
+          </p>
+        )}
+        {vaultResult && (
+          <p className="text-xs text-muted-foreground">
+            Created {vaultResult.created} · Conflicts {vaultResult.conflicts}
+            {vaultResult.errors.length > 0 &&
+              ` · ${vaultResult.errors.length} error(s)`}
+          </p>
+        )}
+      </div>
     </div>
   )
 }

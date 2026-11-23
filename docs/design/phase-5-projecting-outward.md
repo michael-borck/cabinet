@@ -1,7 +1,7 @@
 # Design: Phase 5 — Projecting the view back out
 
-- **Status:** 5a–5b implemented (curation sidecar; symlink-tree export);
-  5c–5d planned.
+- **Status:** 5a–5d implemented (curation sidecar; symlink-tree export;
+  Finder tags; Obsidian vault export). Follow-ups noted in each slice.
 - **Date:** 2026-11-23
 - **Scope:** Non-destructive ways to take Cabinet's curation back into the
   user's own tools: a portable curation sidecar, a materialized symlink tree,
@@ -129,6 +129,14 @@ xattrs (`com.apple.metadata:_kMDItemUserTags`). One-way export first; import
 later. Limits: a handful of visible tags per file; document the macOS-only
 scope and keep it opt-in.
 
+**Implemented (5c).** `POST /exports/finder-tags/plan|apply` adds each live
+file's document-level and per-instance concept names as Finder tags. macOS
+exposes no `os.setxattr`, so the service calls libc's six-argument
+`setxattr`/`getxattr` via ctypes. Writes are **additive**: existing tags
+(and their colour suffix) are preserved; stale Cabinet tags are not removed
+in this slice. Missing files, cloud placeholders, and non-macOS platforms are
+skipped or reported. Settings → Export has Preview/Apply tags.
+
 ## 6. 5d — Obsidian vault export
 
 One markdown stub per document in a chosen vault:
@@ -141,6 +149,14 @@ One markdown stub per document in a chosen vault:
 No raw text body by default (Tier 2 is separate); the stub is a catalogue
 card that makes Cabinet the ingestion/gardening layer in front of a vault the
 user owns as plain text.
+
+**Implemented (5d).** `POST /exports/obsidian/plan|apply` writes create-only
+notes under `<target>/Cabinet/`. Each note has frontmatter for hash, filename,
+path, source, doc type, language, topics, summary, full concept paths, and
+slugged Obsidian tags (`finance/invoices`), plus a `file://` link to the
+original. Library scope covers every document with a file; view scope uses
+the view's files. Existing notes are never overwritten (conflicts are
+reported). An optional saved-view index note is a follow-up.
 
 ## 7. Slices and sequencing
 

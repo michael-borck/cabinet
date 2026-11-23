@@ -383,6 +383,46 @@ class SymlinkTreeResult(BaseModel):
     manifest_path: str | None = None
 
 
+class FinderTagsPlan(BaseModel):
+    supported: bool = True
+    message: str | None = None
+    files: int = 0
+    tagged: int = 0
+    skipped: int = 0
+    samples: list[str] = []
+
+
+class FinderTagsResult(BaseModel):
+    supported: bool = True
+    message: str | None = None
+    tagged: int = 0
+    skipped: int = 0
+    errors: list[str] = []
+
+
+class VaultExportRequest(BaseModel):
+    target_dir: str
+    scope: Literal["library", "view"] = "library"
+    view_id: int | None = None
+
+
+class VaultExportPlan(BaseModel):
+    target_dir: str
+    scope: str = "library"
+    notes: int = 0
+    creates: int = 0
+    conflicts: int = 0
+    samples: list[str] = []
+
+
+class VaultExportResult(BaseModel):
+    target_dir: str
+    scope: str = "library"
+    created: int = 0
+    conflicts: int = 0
+    errors: list[str] = []
+
+
 # ---------------------------------------------------------------------------
 # File schemas
 # ---------------------------------------------------------------------------

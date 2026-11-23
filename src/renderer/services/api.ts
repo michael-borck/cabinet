@@ -281,3 +281,55 @@ export const planSymlinkExport = (data: SymlinkTreeRequest) =>
   api.post('/exports/symlink-tree/plan', data).then(r => r.data as SymlinkTreePlan)
 export const applySymlinkExport = (data: SymlinkTreeRequest) =>
   api.post('/exports/symlink-tree/apply', data).then(r => r.data as SymlinkTreeResult)
+
+// Finder tags (Phase 5c, macOS)
+export interface FinderTagsPlan {
+  supported: boolean
+  message: string | null
+  files: number
+  tagged: number
+  skipped: number
+  samples: string[]
+}
+
+export interface FinderTagsResult {
+  supported: boolean
+  message: string | null
+  tagged: number
+  skipped: number
+  errors: string[]
+}
+
+export const planFinderTags = () =>
+  api.post('/exports/finder-tags/plan').then(r => r.data as FinderTagsPlan)
+export const applyFinderTags = () =>
+  api.post('/exports/finder-tags/apply').then(r => r.data as FinderTagsResult)
+
+// Obsidian vault export (Phase 5d)
+export interface VaultExportRequest {
+  target_dir: string
+  scope: 'library' | 'view'
+  view_id?: number | null
+}
+
+export interface VaultExportPlan {
+  target_dir: string
+  scope: string
+  notes: number
+  creates: number
+  conflicts: number
+  samples: string[]
+}
+
+export interface VaultExportResult {
+  target_dir: string
+  scope: string
+  created: number
+  conflicts: number
+  errors: string[]
+}
+
+export const planObsidianExport = (data: VaultExportRequest) =>
+  api.post('/exports/obsidian/plan', data).then(r => r.data as VaultExportPlan)
+export const applyObsidianExport = (data: VaultExportRequest) =>
+  api.post('/exports/obsidian/apply', data).then(r => r.data as VaultExportResult)
