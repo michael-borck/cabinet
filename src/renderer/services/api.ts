@@ -236,3 +236,48 @@ export const testEmbeddingConfig = (data: { provider: string; model: string; api
   api.post('/settings/embeddings/test', data).then(r => r.data)
 
 export default api
+
+// Symlink-tree export (Phase 5b)
+export interface SymlinkTreeRequest {
+  target_dir: string
+  scope: 'library' | 'view'
+  view_id?: number | null
+}
+
+export interface SymlinkTreeAction {
+  action: 'create' | 'update' | 'remove' | 'keep' | 'conflict'
+  relative_path: string
+  source_path: string | null
+  reason: string | null
+}
+
+export interface SymlinkTreePlan {
+  target_dir: string
+  scope: string
+  supported: boolean
+  message: string | null
+  creates: number
+  updates: number
+  removes: number
+  keeps: number
+  conflicts: number
+  actions: SymlinkTreeAction[]
+  manifest_path: string | null
+}
+
+export interface SymlinkTreeResult {
+  target_dir: string
+  scope: string
+  created: number
+  updated: number
+  removed: number
+  kept: number
+  conflicts: number
+  errors: string[]
+  manifest_path: string | null
+}
+
+export const planSymlinkExport = (data: SymlinkTreeRequest) =>
+  api.post('/exports/symlink-tree/plan', data).then(r => r.data as SymlinkTreePlan)
+export const applySymlinkExport = (data: SymlinkTreeRequest) =>
+  api.post('/exports/symlink-tree/apply', data).then(r => r.data as SymlinkTreeResult)

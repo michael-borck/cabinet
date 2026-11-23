@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText, Inbox, BarChart3, Download, Upload } from 'lucide-react'
+import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText, Inbox, BarChart3, Download, Upload, FolderOutput } from 'lucide-react'
 import { isAxiosError } from 'axios'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory, proposeTaxonomy, applyTaxonomyProposal, getTaxonomyInsights, exportCuration, importCuration } from '@/services/api'
+import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory, proposeTaxonomy, applyTaxonomyProposal, getTaxonomyInsights, exportCuration, importCuration, planSymlinkExport, applySymlinkExport, type SymlinkTreePlan, type SymlinkTreeResult, type SymlinkTreeRequest } from '@/services/api'
+import { useViews } from '@/hooks/useViews'
 import { queryKeys } from '@/services/apiClient'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useUIStore } from '@/stores/uiStore'
@@ -871,6 +872,203 @@ function InsightsTab() {
   )
 }
 
+function ExportTab() {
+  const { data: views } = useViews()
+  const [targetDir, setTargetDir] = useState('')
+  const [scope, setScope] = useState<'library' | 'view'>('library')
+  const [viewId, setViewId] = useState('')
+  const [plan, setPlan] = useState<SymlinkTreePlan | null>(null)
+  const [result, setResult] = useState<SymlinkTreeResult | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const buildRequest = (): SymlinkTreeRequest | null => {
+    if (!targetDir.trim()) {
+      toast.error('Choose a target folder')
+      return null
+    }
+    if (scope === 'view' && !viewId) {
+      toast.error('Choose a view')
+      return null
+    }
+    return {
+      target_dir: targetDir.trim(),
+      scope,
+      view_id: scope === 'view' ? Number(viewId) : null,
+    }
+  }
+
+  const chooseFolder = async () => {
+    const path = await window.api.selectFolder()
+    if (path) {
+      setTargetDir(path)
+      setPlan(null)
+      setResult(null)
+    }
+  }
+
+  const preview = async () => {
+    const request = buildRequest()
+    if (!request) return
+    setBusy(true)
+    try {
+      setPlan(await planSymlinkExport(request))
+      setResult(null)
+    } catch (err) {
+      toast.error(`Preview failed: ${errorDetail(err)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const apply = async () => {
+    const request = buildRequest()
+    if (!request) return
+    if (
+      !window.confirm(
+        'Create or refresh symlinks in this folder? Existing non-generated files are never touched.'
+      )
+    ) {
+      return
+    }
+    setBusy(true)
+    try {
+      const applied = await applySymlinkExport(request)
+      setResult(applied)
+      toast.success(
+        `Exported: ${applied.created} created, ${applied.updated} updated, ${applied.removed} removed`
+      )
+    } catch (err) {
+      toast.error(`Export failed: ${errorDetail(err)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-medium">Export as folders</h3>
+        <p className="text-xs text-muted-foreground">
+          Build a directory of symlinks mirroring the concept tree or one saved view.
+          Files stay exactly where they are; only links are written, and a manifest
+          tracks the ones Cabinet generated.
+        </p>
+      </div>
+
+      <div>
+        <label className="text-xs text-muted-foreground">Target folder</label>
+        <div className="mt-1 flex gap-2">
+          <Input
+            value={targetDir}
+            onChange={(event) => setTargetDir(event.target.value)}
+            placeholder="/Users/you/Exports/Cabinet"
+          />
+          <Button variant="outline" onClick={chooseFolder}>
+            Choose…
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-muted-foreground">Scope</label>
+          <select
+            value={scope}
+            onChange={(event) => {
+              setScope(event.target.value as 'library' | 'view')
+              setPlan(null)
+              setResult(null)
+            }}
+            className="mt-1 flex h-10 w-full rounded-md border bg-background px-3 text-sm"
+          >
+            <option value="library">Whole library (concept tree)</option>
+            <option value="view">A saved view</option>
+          </select>
+        </div>
+        {scope === 'view' && (
+          <div>
+            <label className="text-xs text-muted-foreground">View</label>
+            <select
+              value={viewId}
+              onChange={(event) => {
+                setViewId(event.target.value)
+                setPlan(null)
+                setResult(null)
+              }}
+              className="mt-1 flex h-10 w-full rounded-md border bg-background px-3 text-sm"
+            >
+              <option value="">Choose a view…</option>
+              {(views ?? []).map((view: { id: number; name: string }) => (
+                <option key={view.id} value={view.id}>
+                  {view.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" disabled={busy} onClick={preview}>
+          Preview
+        </Button>
+        <Button size="sm" disabled={busy} onClick={apply}>
+          Export
+        </Button>
+      </div>
+
+      {plan && (
+        <div className="rounded border p-3 text-xs">
+          {!plan.supported ? (
+            <p className="text-destructive">{plan.message}</p>
+          ) : (
+            <>
+              <p>
+                Create {plan.creates} · Update {plan.updates} · Remove{' '}
+                {plan.removes} · Keep {plan.keeps}
+                {plan.conflicts > 0 ? ` · Conflicts ${plan.conflicts}` : ''}
+              </p>
+              <p className="mt-1 text-muted-foreground">Target: {plan.target_dir}</p>
+              {plan.actions.length > 0 && (
+                <ul className="mt-2 max-h-32 overflow-auto text-muted-foreground">
+                  {plan.actions.slice(0, 20).map((action) => (
+                    <li
+                      key={`${action.action}-${action.relative_path}`}
+                      className="truncate"
+                    >
+                      {action.action}: {action.relative_path}
+                      {action.reason ? ` — ${action.reason}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {result && (
+        <div className="rounded border p-3 text-xs">
+          Created {result.created} · Updated {result.updated} · Removed{' '}
+          {result.removed} · Conflicts {result.conflicts}
+          {result.errors.length > 0 && (
+            <ul className="mt-1 text-destructive">
+              {result.errors.map((error) => (
+                <li key={error}>{error}</li>
+              ))}
+            </ul>
+          )}
+          {result.manifest_path && (
+            <p className="mt-1 text-muted-foreground">
+              Manifest: {result.manifest_path}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SettingsDialog() {
   const open = useUIStore((state) => state.settingsOpen)
   const setOpen = useUIStore((state) => state.setSettingsOpen)
@@ -900,11 +1098,15 @@ export function SettingsDialog() {
               <Tabs.Trigger value="insights" className="px-4 py-2 text-sm data-[state=active]:border-b-2 data-[state=active]:border-primary">
                 <BarChart3 className="mr-1 inline h-4 w-4" /> Insights
               </Tabs.Trigger>
+              <Tabs.Trigger value="export" className="px-4 py-2 text-sm data-[state=active]:border-b-2 data-[state=active]:border-primary">
+                <FolderOutput className="mr-1 inline h-4 w-4" /> Export
+              </Tabs.Trigger>
             </Tabs.List>
             <Tabs.Content value="sources" className="pt-4"><SourcesTab /></Tabs.Content>
             <Tabs.Content value="llm" className="pt-4"><LLMTab /></Tabs.Content>
             <Tabs.Content value="review" className="pt-4"><ReviewTab /></Tabs.Content>
             <Tabs.Content value="insights" className="pt-4"><InsightsTab /></Tabs.Content>
+            <Tabs.Content value="export" className="pt-4"><ExportTab /></Tabs.Content>
           </Tabs.Root>
           <Dialog.Close asChild>
             <button className="absolute right-4 top-4">

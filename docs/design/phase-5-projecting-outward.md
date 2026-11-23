@@ -1,7 +1,7 @@
 # Design: Phase 5 — Projecting the view back out
 
-- **Status:** 5a implemented (portable curation sidecar export/import +
-  atomic shutdown snapshot); 5b–5d planned.
+- **Status:** 5a–5b implemented (curation sidecar; symlink-tree export);
+  5c–5d planned.
 - **Date:** 2026-11-23
 - **Scope:** Non-destructive ways to take Cabinet's curation back into the
   user's own tools: a portable curation sidecar, a materialized symlink tree,
@@ -110,6 +110,17 @@ view or concept tree. It is a projection, not a move:
   `shell.writeShortcutLink`.
 - Reject FAT/exFAT targets (no symlinks/links) with a clear message.
 - Dry-run summary: links to create/update/remove.
+
+**Implemented (5b).** `POST /exports/symlink-tree/plan` returns a dry-run
+(create/update/remove/keep/conflict counts plus sampled actions) and `POST
+/exports/symlink-tree/apply` materializes it. Library scope mirrors the
+concept tree (`finance/invoices/…`) with unassigned documents under
+`_uncategorised/`; view scope writes `<view-slug>/…`. A `.cabinet-export.json`
+manifest tracks generated links, so refresh only touches its own entries;
+regular files at a desired path are reported as conflicts, never overwritten.
+A symlink probe turns FAT/exFAT (and unprivileged Windows) into a clear
+“symlinks unavailable” message. The Windows `.lnk` fallback is not wired yet.
+Settings → Export provides target/scope selection, preview, and apply.
 
 ## 5. 5c — Finder tags (macOS)
 

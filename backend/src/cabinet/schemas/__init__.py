@@ -340,6 +340,50 @@ class ViewGroups(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Symlink-tree export (Phase 5b)
+# ---------------------------------------------------------------------------
+
+
+class SymlinkTreeRequest(BaseModel):
+    target_dir: str
+    scope: Literal["library", "view"] = "library"
+    view_id: int | None = None
+
+
+class SymlinkTreeAction(BaseModel):
+    action: Literal["create", "update", "remove", "keep", "conflict"]
+    relative_path: str
+    source_path: str | None = None
+    reason: str | None = None
+
+
+class SymlinkTreePlan(BaseModel):
+    target_dir: str
+    scope: str = "library"
+    supported: bool = True
+    message: str | None = None
+    creates: int = 0
+    updates: int = 0
+    removes: int = 0
+    keeps: int = 0
+    conflicts: int = 0
+    actions: list[SymlinkTreeAction] = []
+    manifest_path: str | None = None
+
+
+class SymlinkTreeResult(BaseModel):
+    target_dir: str
+    scope: str = "library"
+    created: int = 0
+    updated: int = 0
+    removed: int = 0
+    kept: int = 0
+    conflicts: int = 0
+    errors: list[str] = []
+    manifest_path: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # File schemas
 # ---------------------------------------------------------------------------
 
