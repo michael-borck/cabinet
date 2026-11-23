@@ -1,6 +1,6 @@
 {
   "name": "cabinet",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "AI-assisted, non-destructive catalogue and curation for local documents.",
   "author": "Michael Borck",
