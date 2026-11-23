@@ -36,6 +36,7 @@ from cabinet.db.models import (
 from cabinet.utils.concepts import normalize_concept
 from cabinet.utils.fingerprint import fingerprint_similarity, stem_key
 from cabinet.utils.hashing import prefixed_hash
+from cabinet.utils.secrets import encrypt_secret, is_encrypted
 from cabinet.utils.volumes import describe_source_root
 
 logger = logging.getLogger(__name__)
@@ -1806,6 +1807,32 @@ class LLMConfigRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def encrypt_legacy_keys(session: AsyncSession) -> int:
+        """Encrypt plaintext keys written before at-rest encryption existed."""
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id, api_key FROM llm_configs "
+                    "WHERE api_key IS NOT NULL"
+                )
+            )
+        ).all()
+        migrated = 0
+        for config_id, raw in rows:
+            if not raw or is_encrypted(raw):
+                continue
+            encrypted = encrypt_secret(raw)
+            if encrypted == raw:
+                continue
+            await session.execute(
+                text("UPDATE llm_configs SET api_key = :value WHERE id = :id"),
+                {"value": encrypted, "id": config_id},
+            )
+            migrated += 1
+        await session.flush()
+        return migrated
 
     @staticmethod
     async def list_all(session: AsyncSession) -> Sequence[LLMConfig]:

@@ -20,6 +20,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from cabinet.db.types import EncryptedString
+
 
 class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
@@ -519,7 +521,7 @@ class LLMConfig(Base):
     )
     provider: Mapped[str] = mapped_column(String, nullable=False)
     model: Mapped[str] = mapped_column(String, nullable=False)
-    api_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    api_key: Mapped[str | None] = mapped_column(EncryptedString(), nullable=True)
     base_url: Mapped[str | None] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

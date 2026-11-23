@@ -22,6 +22,8 @@ dependencies = [
     "openai>=1.50",
     "google-genai>=1.0",
     "watchdog>=4.0",
+    # At-rest encryption for stored API keys (CABINET_ENCRYPTION_KEY).
+    "cryptography>=42",
 ]
 
 [dependency-groups]

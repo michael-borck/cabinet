@@ -1,9 +1,9 @@
 import { ChildProcess, spawn } from 'child_process'
 import { randomBytes } from 'crypto'
-import { mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { createServer } from 'net'
 import { join } from 'path'
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
 import { is } from '@electron-toolkit/utils'
 
 let backendProcess: ChildProcess | null = null
@@ -25,6 +25,34 @@ async function findFreePort(): Promise<number> {
       server.close(() => resolve(port))
     })
   })
+}
+
+/**
+ * Load the at-rest encryption key for stored API keys. The key itself is a
+ * random 32-byte value protected by the OS keychain via safeStorage; the
+ * backend only sees the decrypted key in its environment.
+ */
+function loadEncryptionKey(): string | undefined {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn(
+        '[backend] safeStorage unavailable; API keys will be stored unencrypted'
+      )
+      return undefined
+    }
+    const userData = app.getPath('userData')
+    mkdirSync(userData, { recursive: true })
+    const keyPath = join(userData, 'backend-key.bin')
+    if (existsSync(keyPath)) {
+      return safeStorage.decryptString(readFileSync(keyPath))
+    }
+    const key = randomBytes(32).toString('hex')
+    writeFileSync(keyPath, safeStorage.encryptString(key), { mode: 0o600 })
+    return key
+  } catch (err) {
+    console.error('[backend] Could not load encryption key:', err)
+    return undefined
+  }
 }
 
 export async function startBackend(): Promise<void> {
@@ -64,15 +92,18 @@ export async function startBackend(): Promise<void> {
     const backendPath = join(process.resourcesPath, 'backend', `cabinet-api${ext}`)
     const userData = app.getPath('userData')
     mkdirSync(userData, { recursive: true })
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CABINET_API_TOKEN: API_TOKEN,
+      CABINET_DB_PATH: join(userData, 'cabinet.db'),
+      CABINET_CURATION_PATH: join(userData, 'curation.json')
+    }
+    const encryptionKey = loadEncryptionKey()
+    if (encryptionKey) env.CABINET_ENCRYPTION_KEY = encryptionKey
 
     backendProcess = spawn(backendPath, ['--port', String(backendPort), '--host', '127.0.0.1'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        CABINET_API_TOKEN: API_TOKEN,
-        CABINET_DB_PATH: join(userData, 'cabinet.db'),
-        CABINET_CURATION_PATH: join(userData, 'curation.json')
-      }
+      env
     })
   }
 

@@ -343,7 +343,8 @@ function LLMForm({ config }: { config: LLMConfig | null }) {
             className="mt-1"
           />
           <p className="mt-1 text-[10px] text-muted-foreground">
-            Stored locally in Cabinet&apos;s database; OS keychain storage is pending.
+            Stored locally; encrypted at rest when the app&apos;s OS key is available
+            (unencrypted in development/standalone runs).
           </p>
         </div>
         {(provider === 'ollama' || provider === 'openai') && (

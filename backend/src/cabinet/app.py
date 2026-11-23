@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from cabinet.config import get_settings
 from cabinet.db.engine import async_session_factory, init_db
-from cabinet.db.repositories import JobRepository
+from cabinet.db.repositories import JobRepository, LLMConfigRepository
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +20,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with async_session_factory() as session:
         swept = await JobRepository.fail_stale_jobs(session)
+        migrated_keys = await LLMConfigRepository.encrypt_legacy_keys(session)
         await session.commit()
     if swept:
         logger.info("Marked %d interrupted job(s) from a previous run as failed", swept)
+    if migrated_keys:
+        logger.info("Encrypted %d legacy API key(s) at rest", migrated_keys)
 
     # Folder watching (Phase 1b). A watcher failure must never take the API
     # down with it — manual sync and launch-time state still work.

@@ -83,6 +83,9 @@ Stop it (SIGTERM) and confirm `curation.json` is written next to the DB.
    and provisional concepts appear; assign a category manually.
 3. **Views:** create a view (concepts/doc types/text), preview, save; verify
    filter chips, facets, group-by counts, and “N versions”.
+   Configure an LLM with an API key, quit, and confirm the raw
+   `llm_configs.api_key` starts with `enc:v1:`; relaunch and check that the
+   provider still works.
 4. **Curation:** review inbox approve/reject/merge; run consolidation;
    propose a taxonomy and apply it; check insights.
 5. **Exports:** symlink-tree export to an APFS folder (preview → apply →
@@ -101,10 +104,11 @@ Stop it (SIGTERM) and confirm `curation.json` is written next to the DB.
 - **Signing/notarisation:** QA builds are unsigned; Windows/Linux artifacts
   are unsigned, so `electron-updater` cannot verify them. Configure a signing
   identity and notarisation before release.
-- **API keys:** stored in the local SQLite database in plaintext (the LLM form
-  says so). OS-keychain storage via Electron `safeStorage` is still pending.
-- **App icon:** `resources/icon.{icns,ico,png}` is not present yet, so the
-  build uses Electron's default icon. Add a real icon set.
+- **API keys at rest:** packaged builds encrypt stored keys with a random
+  key protected by Electron `safeStorage` (OS keychain). The key lives at
+  `<userData>/backend-key.bin`; losing it means re-entering API keys. Dev and
+  standalone runs without `CABINET_ENCRYPTION_KEY` store keys unencrypted (the
+  LLM form says so). Existing plaintext rows are migrated on startup.
 - **Windows symlink fallback:** symlink-tree export reports unprivileged
   Windows/FAT/exFAT clearly but does not create `.lnk` shortcuts yet.
 - **Multi-arch macOS:** the sidecar is single-arch; build the sidecar and the
@@ -127,6 +131,7 @@ Stop it (SIGTERM) and confirm `curation.json` is written next to the DB.
 
 - Production DB: `<userData>/cabinet.db` (set by Electron main).
 - Curation sidecar: `<userData>/curation.json`.
+- At-rest key: `<userData>/backend-key.bin` (safeStorage-protected).
 - Web assets: `Cabinet.app/Contents/Resources/app.asar`.
 - Python backend: `Cabinet.app/Contents/Resources/backend/cabinet-api`.
 - Backend temp (PyInstaller): `<system temp>/cabinet-temp`.
