@@ -9,6 +9,10 @@ directories:
 files:
   - out/**/*
   - package.json
+  # exFAT project volumes create AppleDouble metadata next to files; never
+  # ship those into app.asar.
+  - "!**/._*"
+  - "!**/.DS_Store"
 
 asar: true
 
@@ -18,6 +22,8 @@ extraResources:
     to: backend
     filter:
       - "**/*"
+      - "!**/._*"
+      - "!**/.DS_Store"
 
 win:
   target:
@@ -27,15 +33,16 @@ win:
   icon: resources/icon.ico
 
 mac:
+  # The PyInstaller sidecar is built for one arch at a time. Keep the macOS
+  # release arm64-only; an Intel build needs an x64 sidecar from an Intel
+  # runner (and an x64 target here).
   target:
     - target: dmg
       arch:
-        - x64
         - arm64
     # electron-updater on macOS downloads the ZIP target; DMG alone breaks auto-update
     - target: zip
       arch:
-        - x64
         - arm64
   icon: resources/icon.icns
   category: public.app-category.productivity
