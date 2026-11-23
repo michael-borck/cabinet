@@ -17,7 +17,7 @@ only inside Cabinet. Phases are sequential slices, each shippable alone.
 | 2b | Document-level embeddings (organisation, not RAG; SQLite, no vector DB), server-side search, opt-in Tier 2 full-text (FTS) index, near-duplicate/version clusters | **Implemented** (embeddings, server-side search, opt-in FTS, SimHash/stem/folder version clusters; cluster category inheritance still a follow-up) | [Phase 1+2 design §5](design/phase-1-2-identity-watching-facts.md) |
 | 3 | Concept governance (below): canonical concepts + aliases/synonyms, provisional concepts, consolidation pass, learning from manual corrections | **Implemented** (3a–3d: concepts/aliases/resolution, candidate-ID assignment, review inbox, consolidation/merge, two-pass proposal + drift insights) | [Phase 3 design](design/phase-3-taxonomy-governance.md) |
 | 4 | Views, not one tree: multiple saved projections/facets over facts+concepts (topic, document type, project, people, date) — the "dynamic / personal taxonomy" phase, cheap because views are DB lookups over Phase 2 facts | **Implemented** (4a saved live views + builder/onboarding; 4b facets/grouping/colours; 4c similar documents + version-cluster views) | [Phase 4 design](design/phase-4-views.md) |
-| 5 | Projecting the view outward (below): portable curation sidecar first, then symlink-tree export, Finder tags, Obsidian-vault export (markdown stub + frontmatter per document) | Discussed (notes below) | — |
+| 5 | Projecting the view outward (below): portable curation sidecar first, then symlink-tree export, Finder tags, Obsidian-vault export (markdown stub + frontmatter per document) | **In progress** (5a curation sidecar export/import + shutdown snapshot; 5b–5d pending) | [Phase 5 design](design/phase-5-projecting-outward.md) |
 
 Decisions settled 2026-11-22 (Phase 1+2 design doc, §7): D1 watch default
 (off for existing sources, on at creation only after 1a soaks); D2
@@ -92,6 +92,10 @@ and §8 non-goals):
   near-duplicate pairs.
 
 ## Phase 5 — Projecting the virtual view back into the OS
+
+Design: [phase-5-projecting-outward.md](design/phase-5-projecting-outward.md)
+(5a curation sidecar implemented; 5b symlink tree, 5c Finder tags, 5d
+Obsidian export planned).
 
 Non-destructive alternatives to moving files, discussed July 2026. Ordered
 preference as of Nov 2026: **portable curation sidecar first** (manual

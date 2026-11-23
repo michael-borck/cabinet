@@ -207,6 +207,21 @@ export const getViewGroups = (id: number, groupBy: string) =>
 export const previewView = (query: ViewQuery, params: Record<string, unknown> = {}) =>
   api.post('/views/preview', { query }, { params }).then(r => r.data)
 
+// Curation sidecar (Phase 5a)
+export interface CurationImportResult {
+  concepts_created: number
+  aliases_added: number
+  assignments_applied: number
+  assignments_skipped: number
+  merges_applied: number
+  views_created: number
+  warnings: string[]
+}
+
+export const exportCuration = () => api.get('/curation/export').then(r => r.data)
+export const importCuration = (data: unknown) =>
+  api.post('/curation/import', data).then(r => r.data as CurationImportResult)
+
 // Settings
 export const getLLMConfig = () => api.get('/settings/llm').then(r => r.data)
 export const setLLMConfig = (data: { provider: string; model: string; api_key?: string; base_url?: string }) =>

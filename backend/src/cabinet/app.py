@@ -38,6 +38,17 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await watcher.stop()
+        # Phase 5a: snapshot human curation so it survives losing the DB.
+        try:
+            from cabinet.services.curation import write_sidecar
+
+            async with async_session_factory() as session:
+                path = await write_sidecar(session)
+                await session.commit()
+            if path:
+                logger.info("Wrote curation sidecar to %s", path)
+        except Exception:
+            logger.exception("Could not write curation sidecar")
 
 
 def create_app() -> FastAPI:
@@ -72,6 +83,7 @@ def create_app() -> FastAPI:
     # Register routers
     from cabinet.routers import (
         categories,
+        curation,
         files,
         insights,
         jobs,
@@ -88,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router, prefix="/api/v1")
     app.include_router(insights.router, prefix="/api/v1")
     app.include_router(views.router, prefix="/api/v1")
+    app.include_router(curation.router, prefix="/api/v1")
     app.include_router(settings_router.router, prefix="/api/v1")
 
     @app.get("/api/v1/health")

@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText, Inbox, BarChart3 } from 'lucide-react'
+import { Settings, X, Folder, Brain, RefreshCw, ListFilter, ListRestart, Eye, EyeOff, Sparkles, FileText, Inbox, BarChart3, Download, Upload } from 'lucide-react'
 import { isAxiosError } from 'axios'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory, proposeTaxonomy, applyTaxonomyProposal, getTaxonomyInsights } from '@/services/api'
+import { getSources, createSource, updateSource, deleteSource, scanSource, getLLMConfig, setLLMConfig, testLLMConfig, getEmbeddingConfig, setEmbeddingConfig, testEmbeddingConfig, getCategoryReview, approveCategory, rejectCategory, mergeCategory, consolidateCategories, updateCategory, proposeTaxonomy, applyTaxonomyProposal, getTaxonomyInsights, exportCuration, importCuration } from '@/services/api'
 import { queryKeys } from '@/services/apiClient'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useUIStore } from '@/stores/uiStore'
@@ -118,6 +118,38 @@ function SourcesTab() {
     excludesMut.mutate({ id, patterns })
   }
 
+  const handleExportCuration = async () => {
+    try {
+      const data = await exportCuration()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `cabinet-curation-${new Date().toISOString().slice(0, 10)}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      toast.success('Curation exported')
+    } catch (err) {
+      toast.error(`Failed to export curation: ${errorDetail(err)}`)
+    }
+  }
+
+  const handleImportCuration = async (file: File) => {
+    try {
+      const payload = JSON.parse(await file.text())
+      const result = await importCuration(payload)
+      toast.success(
+        `Imported ${result.assignments_applied} assignments, ${result.concepts_created} concepts, ${result.views_created} views`
+      )
+      qc.invalidateQueries({ queryKey: queryKeys.sources })
+      qc.invalidateQueries({ queryKey: ['files'] })
+      qc.invalidateQueries({ queryKey: ['categories'] })
+      qc.invalidateQueries({ queryKey: ['views'] })
+    } catch (err) {
+      toast.error(`Failed to import curation: ${errorDetail(err)}`)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -217,6 +249,33 @@ function SourcesTab() {
         {(!sources || sources.length === 0) && (
           <p className="text-sm text-muted-foreground">No folders added yet.</p>
         )}
+      </div>
+
+      <div className="space-y-2 border-t pt-4">
+        <h3 className="text-sm font-medium">Curation backup</h3>
+        <p className="text-xs text-muted-foreground">
+          Export manual assignments, concepts, aliases, merges, and saved views to a
+          portable JSON file. Cabinet also writes one next to its database when it
+          exits, so curation can be restored after a rebuild.
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={handleExportCuration}>
+            <Download className="mr-1 h-3 w-3" /> Export JSON
+          </Button>
+          <label className="inline-flex h-8 cursor-pointer items-center rounded-md border px-3 text-xs hover:bg-accent">
+            <Upload className="mr-1 h-3 w-3" /> Import JSON
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) void handleImportCuration(file)
+                event.target.value = ''
+              }}
+            />
+          </label>
+        </div>
       </div>
     </div>
   )

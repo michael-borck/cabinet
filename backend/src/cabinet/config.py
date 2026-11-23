@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     facts_input_max_chars: int = 12000
     # Phase 3: distinct documents before a provisional concept auto-approves.
     concept_promotion_threshold: int = 3
+    # Phase 5a: portable curation sidecar. None = next to the database.
+    curation_path: str | None = None
 
     model_config = {"env_prefix": "CABINET_"}
 
