@@ -85,22 +85,36 @@ set -a; source ~/.certs/apple.env; set +a
 export APPLE_API_KEY_ID="$APPLE_API_KEY"   # Key ID
 export APPLE_API_KEY="$APPLE_API_KEY_P8"   # .p8 path for built-in notarization
 
-npx electron-builder --mac --arm64 --publish never \
+# Host arch (arm64 on this Mac); CI runs the same on an Intel leg.
+npx electron-builder --mac --publish never \
   -c.directories.output=/tmp/cabinet-signed
+bash scripts/notarize-dmg.sh /tmp/cabinet-signed
 
 APP=/tmp/cabinet-signed/mac-arm64/Cabinet.app
 codesign --verify --deep --strict --verbose=2 "$APP"
 spctl --assess --type execute --verbose=4 "$APP"   # Notarized Developer ID
 xcrun stapler validate "$APP"
+xcrun stapler validate /tmp/cabinet-signed/Cabinet-*-arm64.dmg
+spctl -a -vvv -t open --context context:primary-signature \
+  /tmp/cabinet-signed/Cabinet-*-arm64.dmg
 ```
 
 - CI uses `app-hq/.github/workflows/electron-release.yml` with
   `signing-mode: custom` and `notarize-mode: builtin`; the shared
   `electron-keychain` and `apple-signing` actions import the certificate and
   write the API key. `package-command` runs `electron-builder --mac`.
-- The `.app` is notarized and stapled. In builtin mode the DMG container is
-  not separately stapled; validate the app inside it, or use the app-hq DMG
-  notarization/post-package mode if the DMG itself must pass `spctl`.
+- The `.app` is notarized and stapled. `scripts/notarize-dmg.sh` (wired as
+  the workflow's `post-package-command`) also signs, notarizes, and staples
+  each DMG, so the downloaded disk image itself passes `spctl` and validates
+  offline.
+  Local check:
+
+  ```bash
+  bash scripts/notarize-dmg.sh /tmp/cabinet-signed
+  xcrun stapler validate /tmp/cabinet-signed/Cabinet-*-arm64.dmg
+  spctl -a -vvv -t open --context context:primary-signature \
+    /tmp/cabinet-signed/Cabinet-*-arm64.dmg
+  ```
 - ExFAT project volumes create AppleDouble `._*` files. A
   `._cabinet-api` inside the bundle broke notarization; `electron-builder.yml`
   now excludes `._*`/`.DS_Store` from `files` and `extraResources`. Keep the
@@ -143,9 +157,12 @@ xcrun stapler validate "$APP"
   LLM form says so). Existing plaintext rows are migrated on startup.
 - **Windows symlink fallback:** symlink-tree export reports unprivileged
   Windows/FAT/exFAT clearly but does not create `.lnk` shortcuts yet.
-- **Multi-arch macOS:** the sidecar is single-arch and the macOS targets are
-  arm64-only. An Intel build needs an x64 sidecar on an Intel runner plus an
-  x64 target; never bundle the arm64 sidecar into an x64 app.
+- **Multi-arch macOS:** each macOS runner builds its host architecture and a
+  matching single-arch sidecar. The CI matrix has `macos-15` (arm64) and
+  `macos-15-intel` (x64) legs; `scripts/package.sh` maps the `mac-intel`
+  matrix label to `electron-builder --mac`, which builds the runner's host
+  arch because the config has no explicit arch list. Never bundle one arch's
+  sidecar into the other app.
 - **Linux/BSD cloud placeholders:** no portable dataless marker; files on
   cloud FUSE mounts behave as local files.
 - **Obsidian export:** create-only (no updates) and no vault index note;

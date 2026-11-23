@@ -33,17 +33,12 @@ win:
   icon: resources/icon.ico
 
 mac:
-  # The PyInstaller sidecar is built for one arch at a time. Keep the macOS
-  # release arm64-only; an Intel build needs an x64 sidecar from an Intel
-  # runner (and an x64 target here).
+  # Each CI runner builds its own host arch (arm64 or x64) with a matching
+  # sidecar; electron-builder defaults to the current architecture.
   target:
-    - target: dmg
-      arch:
-        - arm64
+    - dmg
     # electron-updater on macOS downloads the ZIP target; DMG alone breaks auto-update
-    - target: zip
-      arch:
-        - arm64
+    - zip
   icon: resources/icon.icns
   category: public.app-category.productivity
   hardenedRuntime: true

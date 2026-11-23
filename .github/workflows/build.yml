@@ -19,10 +19,20 @@ jobs:
     with:
       product-name: Cabinet
       node-version: '20'
-      preflight-command: npx tsc --noEmit
+      preflight-command: npx tsc --noEmit && npm test
       build-command: npm run build
       sidecar-command: bash scripts/build-sidecar.sh
-      package-command: npx electron-builder --$PLATFORM --publish never
+      # Each macOS runner builds its host arch (arm64 or x64) with a matching
+      # sidecar. mac-intel is a local matrix label mapped by scripts/package.sh.
+      matrix: |
+        [
+          {"os":"macos-15","platform":"mac"},
+          {"os":"macos-15-intel","platform":"mac-intel"},
+          {"os":"ubuntu-latest","platform":"linux"},
+          {"os":"windows-latest","platform":"win"}
+        ]
+      package-command: bash scripts/package.sh
+      post-package-command: bash scripts/notarize-dmg.sh release
       notarize-check-command: npx electron-builder --mac --publish never
       notarize-check-artifact-root: release
       signing-mode: custom
