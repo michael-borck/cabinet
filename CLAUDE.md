@@ -49,10 +49,15 @@ uv run uvicorn cabinet.app:create_app --factory --port 8420  # Run standalone
 
 ```bash
 npm install                      # Install deps
-npx tsc --noEmit                 # Type check
-npx electron-vite build          # Production build
+npm run typecheck                # tsc --noEmit
+npm test                         # Vitest smoke tests
+npm run build                    # Production build (electron-vite)
 npm run dev                      # Dev mode (starts Electron + backend)
 ```
+
+See `docs/release-checklist.md` for sidecar/PyInstaller, electron-builder,
+manual smoke tests, and known ship risks. In a packaged app the DB and
+curation sidecar live under Electron's `userData` directory.
 
 ## Environment Variables
 

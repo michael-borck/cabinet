@@ -2,6 +2,8 @@
   "name": "cabinet",
   "version": "0.3.1",
   "private": true,
+  "description": "AI-assisted, non-destructive catalogue and curation for local documents.",
+  "author": "Michael Borck",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -10,7 +12,9 @@
     "build:win": "electron-vite build && electron-builder --win",
     "build:linux": "electron-vite build && electron-builder --linux",
     "preview": "electron-vite preview",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "^2.2.6",
@@ -32,14 +36,14 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.0",
     "cmdk": "^1.0.0",
+    "electron-updater": "^6.3.0",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-resizable-panels": "^2.1.0",
     "sonner": "^1.7.0",
     "tailwind-merge": "^2.6.0",
-    "zustand": "^5.0.0",
-    "electron-updater": "^6.3.0"
+    "zustand": "^5.0.0"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.0",
@@ -52,6 +56,7 @@
     "electron-builder": "^25.0.0",
     "electron-vite": "^2.3.0",
     "tailwindcss": "^4.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.9"
   }
 }

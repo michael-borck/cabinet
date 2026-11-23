@@ -342,6 +342,9 @@ function LLMForm({ config }: { config: LLMConfig | null }) {
             placeholder={keyIsSaved ? '••••••••  (saved — leave blank to keep)' : 'sk-...'}
             className="mt-1"
           />
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            Stored locally in Cabinet&apos;s database; OS keychain storage is pending.
+          </p>
         </div>
         {(provider === 'ollama' || provider === 'openai') && (
           <div>

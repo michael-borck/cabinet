@@ -1,9 +1,11 @@
 node_modules/
 out/
+._*
 dist/
 __pycache__/
 *.pyc
 .venv/
+.venv-sidecar/
 backend/.venv/
 backend/data/
 backend/.pytest_cache/
@@ -15,4 +17,6 @@ backend/.ruff_cache/
 backend-dist/
 backend/build/
 backend/*.spec
+backend/requirements-ci.txt
+backend/server.log
 release/

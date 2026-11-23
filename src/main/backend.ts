@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'child_process'
 import { randomBytes } from 'crypto'
+import { mkdirSync } from 'fs'
 import { createServer } from 'net'
 import { join } from 'path'
 import { app } from 'electron'
@@ -56,13 +57,22 @@ export async function startBackend(): Promise<void> {
       }
     )
   } else {
-    // Production: use bundled PyInstaller executable
+    // Production: use bundled PyInstaller executable.
+    // The backend's default DB path is relative to its (read-only, ephemeral)
+    // bundle, so point it at Electron's userData directory.
     const ext = process.platform === 'win32' ? '.exe' : ''
     const backendPath = join(process.resourcesPath, 'backend', `cabinet-api${ext}`)
+    const userData = app.getPath('userData')
+    mkdirSync(userData, { recursive: true })
 
     backendProcess = spawn(backendPath, ['--port', String(backendPort), '--host', '127.0.0.1'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, CABINET_API_TOKEN: API_TOKEN }
+      env: {
+        ...process.env,
+        CABINET_API_TOKEN: API_TOKEN,
+        CABINET_DB_PATH: join(userData, 'cabinet.db'),
+        CABINET_CURATION_PATH: join(userData, 'curation.json')
+      }
     })
   }
 
